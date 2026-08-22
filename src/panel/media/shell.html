@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; frame-src __DSH_HOST__:*; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: https: __DSH_HOST__:*;">
+  <title>DSH</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    iframe { width: 100%; height: 100%; border: none; display: block; }
+    #status { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 8px;
+              align-items: center; justify-content: center; z-index: 1;
+              color: var(--vscode-descriptionForeground); font: 12px var(--vscode-font-family);
+              background: var(--vscode-sideBar-background); }
+    #status.hidden { display: none; }
+    a { color: var(--vscode-textLink-foreground); }
+  </style>
+</head>
+<body data-dsh-url="__DSH_URL__">
+  <div id="status">正在连接 DSH…<span id="status-detail"></span>
+    <a id="external" href="#" hidden>在浏览器中打开</a>
+  </div>
+  <iframe id="dsh-frame" src="__DSH_URL__" allow="clipboard-read; clipboard-write"></iframe>
+  <script>
+    (function () {
+      var vscode = acquireVsCodeApi();
+      var frame = document.getElementById("dsh-frame");
+      var status = document.getElementById("status");
+      var detail = document.getElementById("status-detail");
+      var external = document.getElementById("external");
+      var url = document.body.getAttribute("data-dsh-url") || "";
+      function diag(what, extra) {
+        try { vscode.postMessage({ type: "diag", what: what, extra: extra || "", url: url }); } catch (e) {}
+      }
+      function showStatus(text, showLink) {
+        detail.textContent = text;
+        if (showLink) { external.href = url; external.hidden = false; }
+      }
+      diag("shell-script-start");
+      frame.src = url;
+      var loaded = false;
+      frame.addEventListener("load", function () {
+        if (frame.getAttribute("src") === "about:blank") return;
+        loaded = true;
+        status.classList.add("hidden");
+        diag("iframe-loaded");
+        try { vscode.postMessage({ type: "ready", url: url }); } catch (e) {}
+      });
+      frame.addEventListener("error", function () {
+        diag("iframe-error");
+        showStatus("iframe 加载失败（可能是 CSP 或网络问题）", true);
+      });
+      setTimeout(function () {
+        if (!loaded) {
+          diag("iframe-timeout");
+          showStatus("10 秒内 iframe 未完成加载 — 可能是 webview CSP 拦截", true);
+        }
+      }, 10000);
+      // Forward messages from the embedded DSH app (M2 bridge later).
+      window.addEventListener("message", function (event) {
+        if (event.source === frame.contentWindow) { /* cross-origin payloads */ }
+      });
+      diag("shell-script-end");
+    })();
+  </script>
+</body>
+</html>

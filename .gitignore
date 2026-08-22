@@ -1,0 +1,11 @@
+# Node
+node_modules/
+
+# Build output
+dist/
+
+# VS Code extension packaging
+*.vsix
+
+# Dev/test artifacts
+scripts/*.log
