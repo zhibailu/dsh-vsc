@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
+<title>DSH</title>
+<style>
+  :root {
+    --fg: var(--vscode-editor-foreground, #d4d4d4);
+    --bg: var(--vscode-sideBar-background, #1e1e1e);
+    --muted: var(--vscode-descriptionForeground, #9d9d9d);
+    --border: var(--vscode-widget-border, #454545);
+    --accent: var(--vscode-button-background, #0e639c);
+    --accent-fg: var(--vscode-button-foreground, #ffffff);
+    --input-bg: var(--vscode-input-background, #3c3c3c);
+    --err: var(--vscode-errorForeground, #f14c4c);
+    --ok: #4ec9b0;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body { display: flex; flex-direction: column; background: var(--bg); color: var(--fg);
+         font-family: var(--vscode-font-family); font-size: var(--vscode-font-size, 13px); overflow: hidden; }
+
+  header { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--border); flex: none; }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+  .pill.on { background: rgba(78, 201, 176, .15); color: var(--ok); }
+  .pill.off { background: rgba(244, 76, 76, .15); color: var(--err); }
+  .pill.busy { background: rgba(224, 185, 74, .18); color: #e0b94a; }
+  #session-select { flex: 1; min-width: 0; background: var(--input-bg); color: var(--fg);
+                    border: 1px solid var(--border); border-radius: 2px; padding: 2px 4px; font-size: 12px; }
+  #new-session { flex: none; width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 2px;
+                 background: transparent; color: var(--fg); cursor: pointer; }
+  #new-session:hover { background: var(--input-bg); }
+
+  #messages { flex: 1; overflow-y: auto; padding: 8px 10px; }
+  .turn-sep { display: flex; align-items: center; gap: 8px; margin: 14px 0 8px; color: var(--muted); font-size: 11px; }
+  .turn-sep::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+  .msg { margin: 6px 0; line-height: 1.55; word-wrap: break-word; }
+  .msg.user { display: flex; justify-content: flex-end; }
+  .msg.user .body { max-width: 92%; background: var(--input-bg); border: 1px solid var(--border);
+                    border-radius: 6px; padding: 6px 10px; white-space: pre-wrap; }
+  .msg.assistant .body { white-space: pre-wrap; }
+  .reasoning { border-left: 2px solid var(--border); padding: 2px 10px; color: var(--muted); margin: 4px 0; }
+  .reasoning summary { cursor: pointer; user-select: none; font-size: 12px; }
+  .reasoning pre { margin: 4px 0; white-space: pre-wrap; font-family: inherit; font-size: 12px; }
+  .msg .stream-cursor::after { content: "▍"; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .tool { border: 1px solid var(--border); border-radius: 4px; margin: 6px 0; overflow: hidden; }
+  .tool summary { cursor: pointer; user-select: none; padding: 4px 8px; display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .tool .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .tool .dot.run { background: #e0b94a; animation: blink 1s infinite; }
+  .tool .dot.ok { background: var(--ok); }
+  .tool .dot.err { background: var(--err); }
+  .tool .tname { font-weight: 600; }
+  .tool .targs { padding: 0 8px 6px; }
+  .tool pre { margin: 4px 0; padding: 6px 8px; background: var(--input-bg); border-radius: 3px;
+              white-space: pre-wrap; word-break: break-all; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
+
+  .sys-err { margin: 6px 0; padding: 6px 10px; border-left: 3px solid var(--err); color: var(--err); white-space: pre-wrap; font-size: 12px; }
+  .empty { color: var(--muted); text-align: center; margin-top: 40px; font-size: 12px; line-height: 2; }
+
+  footer { flex: none; border-top: 1px solid var(--border); padding: 6px 8px; }
+  #input-status { font-size: 11px; color: var(--muted); min-height: 16px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #input-row { display: flex; gap: 6px; align-items: flex-end; }
+  #input { flex: 1; resize: none; background: var(--input-bg); color: var(--fg); border: 1px solid var(--border);
+           border-radius: 3px; padding: 6px 8px; font-family: inherit; font-size: 13px; max-height: 180px; }
+  #input:focus { outline: 1px solid var(--accent); }
+  .btn { width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 3px; background: transparent; color: var(--fg); cursor: pointer; flex: none; }
+  .btn:hover { background: var(--input-bg); }
+  .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+  .btn.primary:disabled { opacity: .5; cursor: default; }
+  #cancel { color: var(--err); }
+</style>
+</head>
+<body>
+  <header>
+    <span id="pill" class="pill off">○</span>
+    <select id="session-select" title="切换会话"></select>
+    <button id="new-session" title="新会话">＋</button>
+  </header>
+  <main id="messages"></main>
+  <footer>
+    <div id="input-status"></div>
+    <div id="input-row">
+      <textarea id="input" rows="1" placeholder="发消息…（Enter 发送，Shift+Enter 换行）"></textarea>
+      <button id="send" class="btn primary" title="发送">➤</button>
+      <button id="cancel" class="btn" title="停止当前回合" hidden>✕</button>
+    </div>
+  </footer>
+<script>
+(function () {
+  "use strict";
+  var vscode = acquireVsCodeApi();
+  var $ = function (id) { return document.getElementById(id); };
+  var messagesEl = $("messages"), pillEl = $("pill"), selEl = $("session-select"),
+      inputEl = $("input"), sendBtn = $("send"), cancelBtn = $("cancel"), statusEl = $("input-status");
+
+  var state = {
+    connected: false, version: null,
+    sessions: [], activeSessionId: null,
+    items: [], seqs: new Set(), oldestSeq: Infinity,
+    running: false, lastTurn: -1,
+    curAssistant: null, openBlocks: [],
+    titles: {}
+  };
+
+  function post(msg) { try { vscode.postMessage(msg); } catch (e) {} }
+  function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+  /* ---------- markdown-lite ---------- */
+  function renderInline(text) {
+    return esc(text)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  }
+  function renderText(text) {
+    var parts = String(text).split(/```/);
+    var out = "";
+    for (var i = 0; i < parts.length; i++) {
+      if (i % 2 === 0) {
+        out += renderInline(parts[i]);
+      } else {
+        var lines = parts[i].split("\n");
+        if (lines[0] && /^[a-zA-Z0-9_-]+$/.test(lines[0].trim())) lines.shift();
+        out += "<pre><code>" + esc(lines.join("\n")) + "</code></pre>";
+      }
+    }
+    return out;
+  }
+
+  /* ---------- helpers on event payloads ---------- */
+  function blocksOf(message) { return (message && message.content) || []; }
+  function textBlocksOf(message) {
+    return blocksOf(message).filter(function (b) { return b && b.type === "text"; })
+      .map(function (b) { return b.text; }).join("");
+  }
+  function contentBlocks(message) {
+    return blocksOf(message).filter(function (b) {
+      return b && (b.type === "text" || b.type === "reasoning");
+    }).map(function (b) {
+      return { type: b.type, text: String(b.text || "") };
+    });
+  }
+  function prettyArgs(s) {
+    try { return JSON.stringify(JSON.parse(s), null, 2); } catch (e) { return String(s || ""); }
+  }
+  function summarizeResult(content) {
+    var parts = [];
+    (content || []).forEach(function (b) {
+      if (b && typeof b.text === "string") parts.push(b.text);
+      else if (b && b.type === "tool-result" && Array.isArray(b.content)) parts.push(summarizeResult(b.content));
+    });
+    var s = parts.join("\n").trim();
+    return s.length > 1500 ? s.slice(0, 1500) + "\n…（截断）" : s;
+  }
+
+  /* ---------- fold: events -> render items ---------- */
+  function finalizeStream() {
+    if (state.curAssistant) {
+      state.curAssistant.streaming = false;
+      state.curAssistant = null;
+    }
+    state.openBlocks = [];
+  }
+  function ensureAssistant() {
+    if (!state.curAssistant) {
+      state.curAssistant = { kind: "assistant", blocks: [], done: false, streaming: true };
+      state.items.push(state.curAssistant);
+    }
+  }
+  function syncAssistantFromBlocks() {
+    if (!state.curAssistant) return;
+    state.curAssistant.blocks = state.openBlocks
+      .filter(function (b) { return b && b.text; })
+      .map(function (b) { return { type: b.type, text: b.text }; });
+  }
+  function findTool(callId) {
+    for (var i = state.items.length - 1; i >= 0; i--) {
+      if (state.items[i].kind === "tool" && state.items[i].callId === callId) return state.items[i];
+    }
+    return null;
+  }
+
+  function applyEvent(ev) {
+    if (ev && typeof ev.seq === "number") {
+      if (state.seqs.has(ev.seq)) return;
+      state.seqs.add(ev.seq);
+      if (ev.seq < state.oldestSeq) state.oldestSeq = ev.seq;
+    }
+    var d = (ev && ev.data) || {};
+    switch (ev && ev.type) {
+      case "turn/start":
+        finalizeStream();
+        state.lastTurn = typeof d.turn === "number" ? d.turn : state.lastTurn + 1;
+        state.items.push({ kind: "turn", turn: state.lastTurn, done: false });
+        break;
+      case "user/message": {
+        var u = textBlocksOf(d.message);
+        if (u) state.items.push({ kind: "user", text: u });
+        break;
+      }
+      case "assistant/chunk": {
+        var chunk = d.chunk || {};
+        ensureAssistant();
+        if (chunk.type === "block-start") {
+          state.openBlocks[chunk.index] = { type: chunk.blockType || "text", text: "" };
+        } else if (chunk.type === "text-delta" || chunk.type === "reasoning-delta") {
+          var b = state.openBlocks[chunk.index] || (state.openBlocks[chunk.index] = { type: chunk.type === "reasoning-delta" ? "reasoning" : "text", text: "" });
+          if (chunk.text) b.text += chunk.text;
+          syncAssistantFromBlocks();
+        }
+        break;
+      }
+      case "assistant/message": {
+        ensureAssistant();
+        state.curAssistant.blocks = contentBlocks(d.message);
+        state.curAssistant.done = true;
+        state.curAssistant.streaming = false;
+        state.curAssistant = null;
+        state.openBlocks = [];
+        break;
+      }
+      case "tool/call":
+        state.items.push({ kind: "tool", callId: d.callId, name: d.name || "tool",
+                           argsText: prettyArgs(d.arguments), status: "running", resultText: "" });
+        break;
+      case "tool/result": {
+        var msg = d.message || {};
+        var block = null;
+        (msg.content || []).forEach(function (b) { if (b && b.type === "tool-result") block = b; });
+        var callId = (block && block.toolCallId) || d.callId;
+        var tool = findTool(callId);
+        if (tool) {
+          tool.status = block && block.isError ? "error" : "ok";
+          tool.resultText = summarizeResult(block && block.content);
+        }
+        break;
+      }
+      case "turn/end": {
+        finalizeStream();
+        for (var i = state.items.length - 1; i >= 0; i--) {
+          if (state.items[i].kind === "turn") { state.items[i].done = true; break; }
+        }
+        break;
+      }
+      case "session/title":
+        if (typeof d.title === "string") { state.titles[state.activeSessionId] = d.title; }
+        break;
+    }
+    scheduleRender();
+  }
+
+  /* ---------- rendering (rAF-throttled full rebuild) ---------- */
+  var dirty = false, nearBottom = true;
+  function scheduleRender() { if (dirty) return; dirty = true; requestAnimationFrame(render); }
+  function scrollPos() {
+    return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 60;
+  }
+  function render() {
+    dirty = false;
+    var stick = scrollPos();
+    var frag = document.createDocumentFragment();
+
+    if (!state.connected) {
+      frag.appendChild(emptyDiv("harness 未连接。<br>状态栏点击「DSH」或命令面板运行「DSH: Start Web Harness」。"));
+    } else if (state.items.length === 0) {
+      frag.appendChild(emptyDiv("没有消息。<br>输入框发消息即可开始（会自动创建会话）。"));
+    }
+
+    for (var i = 0; i < state.items.length; i++) {
+      frag.appendChild(renderItem(state.items[i]));
+    }
+    messagesEl.innerHTML = "";
+    messagesEl.appendChild(frag);
+    if (stick || nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+  function emptyDiv(html) { var d = document.createElement("div"); d.className = "empty"; d.innerHTML = html; return d; }
+
+  function renderItem(item) {
+    var el = document.createElement("div");
+    switch (item.kind) {
+      case "turn": {
+        el.className = "turn-sep";
+        el.innerHTML = "<span>— 第 " + item.turn + " 轮" + (item.done ? "" : " · 进行中") + " —</span>";
+        break;
+      }
+      case "user": {
+        el.className = "msg user";
+        el.innerHTML = "<div class='body'>" + renderInline(item.text) + "</div>";
+        break;
+      }
+      case "assistant": {
+        el.className = "msg assistant";
+        var html = "";
+        item.blocks.forEach(function (b) {
+          if (b.type === "reasoning") {
+            html += "<details class='reasoning'><summary>思考</summary><pre>" + esc(b.text) + "</pre></details>";
+          } else {
+            html += "<div class='body'>" + renderText(b.text) + (item.streaming ? "<span class='stream-cursor'></span>" : "") + "</div>";
+          }
+        });
+        if (item.blocks.length === 0 && item.streaming) html = "<div class='body'><span class='stream-cursor'></span></div>";
+        el.innerHTML = html;
+        break;
+      }
+      case "tool": {
+        el.className = "tool";
+        var dot = item.status === "running" ? "run" : item.status === "error" ? "err" : "ok";
+        var body = "<summary><span class='dot " + dot + "'></span><span class='tname'>" + esc(item.name) + "</span></summary>";
+        if (item.argsText) body += "<div class='targs'><pre>" + esc(item.argsText) + "</pre></div>";
+        if (item.resultText) body += "<div class='targs'><pre>" + esc(item.resultText) + "</pre></div>";
+        el.innerHTML = body;
+        break;
+      }
+      default:
+        el.className = "sys-err";
+        el.textContent = JSON.stringify(item);
+    }
+    return el;
+  }
+
+  /* ---------- protocol from host ---------- */
+  window.addEventListener("message", function (event) {
+    var msg = event.data;
+    if (!msg || typeof msg !== "object") return;
+    switch (msg.type) {
+      case "state": {
+        state.connected = msg.connected;
+        state.version = msg.version;
+        state.sessions = msg.sessions || [];
+        state.activeSessionId = msg.activeSessionId;
+        if (state.activeSessionId && state.titles[state.activeSessionId] === undefined) {
+          state.titles[state.activeSessionId] = undefined;
+        }
+        // If the active session changed (or first state), reset the view to that session's cache
+        if (msg.activeSessionId !== state.lastSessionId) {
+          state.lastSessionId = msg.activeSessionId;
+          state.items = []; state.seqs = new Set(); state.oldestSeq = Infinity;
+          state.curAssistant = null; state.openBlocks = [];
+        }
+        updateHeader();
+        scheduleRender();
+        break;
+      }
+      case "history": {
+        if (msg.sessionId !== state.activeSessionId) return;
+        state.items = []; state.seqs = new Set(); state.oldestSeq = Infinity;
+        state.curAssistant = null; state.openBlocks = [];
+        (msg.events || []).forEach(applyEvent);
+        scheduleRender();
+        break;
+      }
+      case "event": {
+        if (msg.sessionId !== state.activeSessionId) return;
+        applyEvent(msg.event);
+        break;
+      }
+      case "running": {
+        if (msg.sessionId === state.activeSessionId) {
+          state.running = msg.running;
+          updateHeader();
+        }
+        break;
+      }
+      case "error":
+        state.items.push({ kind: "error", text: msg.message });
+        scheduleRender();
+        break;
+    }
+  });
+
+  function updateHeader() {
+    var s = state.sessions.find(function (x) { return x.sessionId === state.activeSessionId; });
+    if (state.connected) {
+      pillEl.className = "pill " + (state.running ? "busy" : "on");
+      pillEl.textContent = state.running ? "● 运行中" : "● 已连接";
+      pillEl.title = "harness v" + (state.version || "?");
+    } else {
+      pillEl.className = "pill off";
+      pillEl.textContent = "○ 离线";
+    }
+    selEl.innerHTML = "";
+    state.sessions.forEach(function (sess) {
+      var opt = document.createElement("option");
+      opt.value = sess.sessionId;
+      var title = state.titles[sess.sessionId];
+      opt.textContent = title ? title : (sess.sessionId.replace(/^session-/, "").slice(0, 8));
+      if (sess.running) opt.textContent += " ●";
+      if (sess.sessionId === state.activeSessionId) opt.selected = true;
+      selEl.appendChild(opt);
+    });
+    cancelBtn.hidden = !state.running;
+    sendBtn.disabled = !state.connected;
+    statusEl.textContent = state.running
+      ? "agent 运行中…"
+      : (state.connected ? (s && s.title ? s.title : "") : "");
+  }
+
+  /* ---------- input ---------- */
+  function autoGrow() {
+    inputEl.style.height = "auto";
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + "px";
+  }
+  inputEl.addEventListener("input", autoGrow);
+  inputEl.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      send();
+    }
+  });
+  sendBtn.addEventListener("click", send);
+  function send() {
+    var text = inputEl.value.trim();
+    if (!text) return;
+    post({ type: "send", text: text });
+    inputEl.value = "";
+    autoGrow();
+  }
+  cancelBtn.addEventListener("click", function () { post({ type: "cancel" }); });
+  selEl.addEventListener("change", function () {
+    if (selEl.value) post({ type: "selectSession", sessionId: selEl.value });
+  });
+  $("new-session").addEventListener("click", function () { post({ type: "newSession" }); });
+
+  post({ type: "ready" });
+})();
+</script>
+</body>
+</html>

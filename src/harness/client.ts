@@ -53,6 +53,28 @@ export class HarnessClient {
     return this.call<{ accepted: true }>(METHODS.sessionPrompt, { sessionId, mode, content });
   }
 
+  /** One history page: raw events + hasMore. */
+  history(
+    sessionId: string,
+    beforeSeq?: number,
+    maxMessages = 30,
+    signal?: AbortSignal
+  ): Promise<{ events: { event: SessionEventLike }[]; hasMore: boolean }> {
+    return this.call<{ events: { event: SessionEventLike }[]; hasMore: boolean }>(
+      METHODS.sessionHistory,
+      { sessionId, beforeSeq, maxMessages },
+      signal
+    );
+  }
+
+  createSession(): Promise<{ sessionId: string }> {
+    return this.call<{ sessionId: string }>(METHODS.sessionCreate, {});
+  }
+
+  cancel(sessionId: string): Promise<{ accepted: true }> {
+    return this.call<{ accepted: true }>(METHODS.sessionCancel, { sessionId });
+  }
+
   /** Cheap liveness probe: host.describe within a timeout. */
   async isAlive(timeoutMs = 1500): Promise<HostDescription | null> {
     try {
@@ -61,4 +83,12 @@ export class HarnessClient {
       return null;
     }
   }
+}
+
+/** Minimal session-event shape (wire passthrough). */
+export interface SessionEventLike {
+  type: string;
+  seq?: number;
+  data?: Record<string, unknown>;
+  surfaceOp?: string;
 }

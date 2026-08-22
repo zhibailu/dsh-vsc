@@ -28,6 +28,7 @@ async function main() {
   };
 
   copyDir("src/panel/media", "dist/media");
+  copyDir("src/panel/native", "dist/media/native");
 
   if (watch) {
     const ctx = await esbuild.context(options);

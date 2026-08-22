@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
-import { SidebarProvider } from "./panel/SidebarProvider";
+import { NativePanelProvider } from "./panel/NativePanelProvider";
+import { renderEmbedHtml } from "./panel/embed";
 import { DshStatusBar } from "./status";
 import { HarnessClient } from "./harness/client";
 import { configuredBase, discover, portOf } from "./harness/discover";
@@ -8,6 +9,7 @@ import { HarnessEventStream } from "./events/eventStream";
 import { ChangeTracker } from "./editor/changeTracker";
 import { askSelection } from "./editor/askSelection";
 import { reviewFiles } from "./editor/diff";
+import type { PanelEvent } from "./panel/protocol";
 
 const POLL_MS = 1000;
 const START_TIMEOUT_MS = 30000;
@@ -20,11 +22,13 @@ export function activate(context: vscode.ExtensionContext): void {
     log.appendLine(message);
     console.log("[dsh-vsc]", message); // lands in the exthost log for headless diagnosis
   };
-  const sidebar = new SidebarProvider(context, makeLog);
   const tracker = new ChangeTracker();
+  const panelListeners = new Set<(sessionId: string, event: PanelEvent) => void>();
   let client: HarnessClient | null = null;
   let stream: HarnessEventStream | null = null;
   let autoStarted = false;
+
+  const panel = new NativePanelProvider(context, makeLog, () => client, (cb) => panelListeners.add(cb));
 
   log.appendLine("dsh-vsc activated");
 
@@ -34,7 +38,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(RIGHT_VIEW, sidebar, {
+    vscode.window.registerWebviewViewProvider(RIGHT_VIEW, panel, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
     status,
@@ -53,6 +57,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("dsh.refreshStatus", () => {
       void refresh();
     }),
+    vscode.commands.registerCommand("dsh.openWebView", () => openWebView(context, log)),
     vscode.commands.registerCommand("dsh.askSelection", () => askSelection(() => client)),
     vscode.commands.registerCommand("dsh.reviewChanges", () => reviewFiles(tracker.latestFiles()))
   );
@@ -80,15 +85,16 @@ export function activate(context: vscode.ExtensionContext): void {
 
   async function refresh(): Promise<void> {
     const d = await discover();
-    sidebar.setBase(d.base);
     if (d.alive) {
       client = new HarnessClient(d.base);
       status.setOnline(d.version ?? "?");
       log.appendLine(`harness connected at ${d.base} (version ${d.version})`);
+      panel.setClient(client, d.version);
       ensureStream(d.base);
       return;
     }
     client = null;
+    panel.setClient(null);
     log.appendLine(`no harness at ${d.base}`);
     const autoStart = vscode.workspace.getConfiguration("dshVsc").get<boolean>("autoStart", true);
     if (autoStart && !autoStarted) {
@@ -102,7 +108,10 @@ export function activate(context: vscode.ExtensionContext): void {
   function ensureStream(base: string): void {
     if (stream) return;
     stream = new HarnessEventStream(base);
-    stream.onSessionEvent = (sessionId, event) => tracker.handleEvent(sessionId, event);
+    stream.onSessionEvent = (sessionId, event) => {
+      tracker.handleEvent(sessionId, event);
+      panelListeners.forEach((cb) => cb(sessionId, event as PanelEvent));
+    };
     stream.onError = (message) => log.appendLine(`event stream: ${message}`);
     stream.start();
     context.subscriptions.push({
@@ -114,13 +123,27 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   async function waitUntilAlive(base: string, timeoutMs: number): Promise<void> {
-    const client = new HarnessClient(base);
+    const probe = new HarnessClient(base);
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      if (await client.isAlive(800)) return;
+      if (await probe.isAlive(800)) return;
       await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     }
     log.appendLine(`timed out waiting for harness at ${base}`);
+  }
+}
+
+/** Optional full DSH web GUI as an editor tab (the embed, demoted from main surface). */
+function openWebView(context: vscode.ExtensionContext, log: vscode.OutputChannel): void {
+  const panel = vscode.window.createWebviewPanel("dsh.webview", "DSH (Web)", vscode.ViewColumn.One, {
+    enableScripts: true,
+    retainContextWhenHidden: true,
+    localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "dist", "media")],
+  });
+  try {
+    panel.webview.html = renderEmbedHtml(panel.webview, configuredBase(), context);
+  } catch (error) {
+    log.appendLine(`openWebView render failed: ${(error as Error).message}`);
   }
 }
 

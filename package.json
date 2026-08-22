@@ -53,6 +53,10 @@
         "title": "DSH: Refresh Connection Status"
       },
       {
+        "command": "dsh.openWebView",
+        "title": "DSH: Open Web GUI (advanced)"
+      },
+      {
         "command": "dsh.askSelection",
         "title": "DSH: Ask about selection",
         "enablement": "editorHasSelection"
