@@ -73,6 +73,11 @@
   .m-item.hint { color: var(--muted); cursor: default; }
   .m-kind { opacity: .5; margin-right: 2px; }
   .m-path { opacity: .6; margin-left: 8px; font-size: 11px; }
+  .m-crumbs { padding: 4px 8px; border-bottom: 1px solid var(--border); color: var(--muted);
+              font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .m-crumbs span { cursor: pointer; }
+  .m-crumbs span:hover { color: var(--fg); text-decoration: underline; }
+  .m-crumbs span.cur { color: var(--fg); cursor: default; }
   #input-status { font-size: 11px; color: var(--muted); min-height: 16px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #input-row { display: flex; gap: 6px; align-items: flex-end; }
   #input { flex: 1; resize: none; background: var(--input-bg); color: var(--fg); border: 1px solid var(--border);
@@ -402,11 +407,12 @@
     }
   });
 
-  /* ---------- @ mention: inline menu above the input ---------- */
+  /* ---------- @ mention: drill-down directory menu above the input ---------- */
   var mentionTimer = null;
   var menuEl = $("mention-menu");
   var menuItems = [], menuIndex = 0, menuActive = false;
   var fileIndex = { files: [], dirs: [] };
+  var currentDir = "";
 
   function mentionMatch(value) {
     var m = /(?:^|\s)@([^\s@]*)$/.exec(value);
@@ -426,37 +432,81 @@
     autoGrow();
     hideMenu();
   }
-  function filteredItems(q) {
+  function dirParent(d) { var i = d.lastIndexOf("/"); return i < 0 ? "" : d.slice(0, i); }
+  function childrenOf(dir) {
+    var prefix = dir ? dir + "/" : "";
+    var dirs = fileIndex.dirs.filter(function (d) {
+      return d.slice(0, prefix.length) === prefix && d.slice(prefix.length).indexOf("/") < 0;
+    }).sort();
+    var files = fileIndex.files.filter(function (f) {
+      return f.slice(0, prefix.length) === prefix && f.slice(prefix.length).indexOf("/") < 0;
+    }).sort();
+    return { dirs: dirs, files: files };
+  }
+  function menuRows(q) {
     var v = q.trim().toLowerCase();
-    var hit = function (p) {
-      return !v || p.toLowerCase().indexOf(v) >= 0 || p.split("/").pop().toLowerCase().indexOf(v) >= 0;
-    };
-    var dirs = fileIndex.dirs.filter(hit).slice(0, 40);
-    var files = fileIndex.files.filter(hit).slice(0, 20);
+    var c = childrenOf(currentDir);
+    if (v) {
+      var hit = function (p) { return p.toLowerCase().indexOf(v) >= 0 || p.split("/").pop().toLowerCase().indexOf(v) >= 0; };
+      c = { dirs: c.dirs.filter(hit), files: c.files.filter(hit) };
+    }
     var rows = [];
-    dirs.forEach(function (d) { rows.push({ rel: d, isDir: true }); });
-    files.forEach(function (f) { rows.push({ rel: f, isDir: false }); });
-    return rows;
+    if (currentDir !== "") rows.push({ kind: "up", rel: currentDir, name: "↑ 上级" });
+    c.dirs.forEach(function (d) { rows.push({ kind: "dir", rel: d, name: d.split("/").pop() + "/" }); });
+    c.files.forEach(function (f) { rows.push({ kind: "file", rel: f, name: f.split("/").pop() }); });
+    return rows.slice(0, 60);
+  }
+  function drawBreadcrumbs() {
+    var div = document.createElement("div");
+    div.className = "m-crumbs";
+    if (currentDir === "") {
+      div.innerHTML = "<span class='cur'>工作区</span>";
+    } else {
+      var segs = currentDir.split("/");
+      var root = document.createElement("span");
+      root.textContent = "工作区";
+      root.onclick = function () { currentDir = ""; refreshMentionMenu(); };
+      div.appendChild(root);
+      var acc = "";
+      segs.forEach(function (seg, i) {
+        div.appendChild(document.createTextNode(" / "));
+        acc = acc ? acc + "/" + seg : seg;
+        var s = document.createElement("span");
+        s.textContent = seg;
+        if (i === segs.length - 1) s.className = "cur";
+        else s.onclick = (function (p) { return function () { currentDir = p; refreshMentionMenu(); }; })(acc);
+        div.appendChild(s);
+      });
+    }
+    return div;
   }
   function drawMenu() {
     menuEl.innerHTML = "";
+    menuEl.appendChild(drawBreadcrumbs());
     menuItems.forEach(function (it, i) {
       var div = document.createElement("div");
-      div.className = "m-item" + (it.rel === null ? " hint" : "") + (i === menuIndex ? " sel" : "");
-      if (it.rel === null) {
-        div.textContent = it.label;
+      div.className = "m-item" + (it.kind === "hint" ? " hint" : "") + (i === menuIndex ? " sel" : "");
+      if (it.kind === "hint") {
+        div.textContent = it.name;
+      } else if (it.kind === "up") {
+        div.textContent = it.name;
+        div.onclick = function () { currentDir = dirParent(currentDir); refreshMentionMenu(); };
+        div.onmouseenter = function () { if (menuIndex !== i) { menuIndex = i; drawMenu(); } };
       } else {
         var kind = document.createElement("span");
         kind.className = "m-kind";
-        kind.textContent = it.isDir ? "文件夹" : "文件";
-        var name = document.createTextNode("·" + it.rel.split("/").pop() + (it.isDir ? "/" : "") + " ");
+        kind.textContent = it.kind === "dir" ? "文件夹" : "文件";
+        var name = document.createTextNode("·" + it.name + " ");
         var p = document.createElement("span");
         p.className = "m-path";
         p.textContent = it.rel;
         div.appendChild(kind);
         div.appendChild(name);
         div.appendChild(p);
-        div.onclick = function () { insertMention(it.rel, it.isDir); };
+        div.onclick = function () {
+          if (it.kind === "dir") { currentDir = it.rel; refreshMentionMenu(); }
+          else insertMention(it.rel, false);
+        };
         div.onmouseenter = function () { if (menuIndex !== i) { menuIndex = i; drawMenu(); } };
       }
       menuEl.appendChild(div);
@@ -469,12 +519,12 @@
     var m = mentionMatch(inputEl.value);
     if (!m) { hideMenu(); return; }
     if (fileIndex.files.length === 0 && fileIndex.dirs.length === 0) {
-      showMenu([{ label: "文件索引加载中…", rel: null }]);
+      showMenu([{ kind: "hint", name: "文件索引加载中…", rel: null }]);
       post({ type: "refreshFiles" });
       return;
     }
-    var items = filteredItems(m.query);
-    showMenu(items.length ? items : [{ label: "无匹配", rel: null }]);
+    var items = menuRows(m.query);
+    showMenu(items.length ? items : [{ kind: "hint", name: "无匹配", rel: null }]);
   }
   function maybeTriggerMention() {
     if (mentionTimer) clearTimeout(mentionTimer);
@@ -520,10 +570,21 @@
     if (menuActive) {
       if (e.key === "ArrowDown") { e.preventDefault(); menuIndex = Math.min(menuIndex + 1, menuItems.length - 1); drawMenu(); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); menuIndex = Math.max(menuIndex - 1, 0); drawMenu(); return; }
+      if (e.key === "ArrowLeft") { e.preventDefault(); if (currentDir !== "") { currentDir = dirParent(currentDir); refreshMentionMenu(); } return; }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        var sel = menuItems[menuIndex];
+        if (sel && sel.kind === "dir") { currentDir = sel.rel; refreshMentionMenu(); }
+        return;
+      }
       if (e.key === "Enter") {
         e.preventDefault();
         var it = menuItems[menuIndex];
-        if (it && it.rel !== null) insertMention(it.rel, it.isDir); else hideMenu();
+        if (!it) { hideMenu(); return; }
+        if (it.kind === "up") { currentDir = dirParent(currentDir); refreshMentionMenu(); }
+        else if (it.kind === "dir") { currentDir = it.rel; refreshMentionMenu(); }
+        else if (it.kind === "file") insertMention(it.rel, false);
+        else hideMenu();
         return;
       }
       if (e.key === "Escape") { e.preventDefault(); hideMenu(); return; }
