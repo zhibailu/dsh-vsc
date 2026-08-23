@@ -62,7 +62,22 @@
   .sys-err { margin: 6px 0; padding: 6px 10px; border-left: 3px solid var(--err); color: var(--err); white-space: pre-wrap; font-size: 12px; }
   .empty { color: var(--muted); text-align: center; margin-top: 40px; font-size: 12px; line-height: 2; }
 
-  footer { flex: none; border-top: 1px solid var(--border); padding: 6px 8px; }
+  footer { flex: none; position: relative; border-top: 1px solid var(--border); padding: 6px 8px; }
+  #mention-menu { position: absolute; bottom: 100%; left: 8px; right: 8px; max-height: 40vh; overflow-y: auto;
+    background: var(--vscode-quickInput-background, var(--input-bg)); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 4px; z-index: 20; font-size: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.35); }
+  .m-item { padding: 4px 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .m-item.sel { background: var(--vscode-list-activeSelectionBackground, #094771);
+                color: var(--vscode-list-activeSelectionForeground, #ffffff); }
+  .m-item.hint { color: var(--muted); cursor: default; }
+  .m-kind { opacity: .5; margin-right: 2px; }
+  .m-path { opacity: .6; margin-left: 8px; font-size: 11px; }
+  .m-crumbs { padding: 4px 8px; border-bottom: 1px solid var(--border); color: var(--muted);
+              font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .m-crumbs span { cursor: pointer; }
+  .m-crumbs span:hover { color: var(--fg); text-decoration: underline; }
+  .m-crumbs span.cur { color: var(--fg); cursor: default; }
   #input-status { font-size: 11px; color: var(--muted); min-height: 16px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #input-row { display: flex; gap: 6px; align-items: flex-end; }
   #input { flex: 1; resize: none; background: var(--input-bg); color: var(--fg); border: 1px solid var(--border);
@@ -83,6 +98,7 @@
   </header>
   <main id="messages"></main>
   <footer>
+    <div id="mention-menu" hidden></div>
     <div id="input-status"></div>
     <div id="input-row">
       <textarea id="input" rows="1" placeholder="发消息…（Enter 发送，Shift+Enter 换行）"></textarea>
@@ -109,6 +125,18 @@
 
   function post(msg) { try { vscode.postMessage(msg); } catch (e) {} }
   function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+  function relTime(ts) {
+    if (!ts) return "";
+    var diff = Date.now() - ts;
+    if (diff < 60e3) return "刚刚";
+    if (diff < 3600e3) return Math.floor(diff / 60e3) + "分钟前";
+    if (diff < 86400e3) return Math.floor(diff / 3600e3) + "小时前";
+    if (diff < 172800e3) return "昨天";
+    if (diff < 604800e3) return Math.floor(diff / 86400e3) + "天前";
+    var d = new Date(ts);
+    return (d.getMonth() + 1) + "-" + d.getDate();
+  }
+  function shortId(id) { return String(id || "").replace(/^session-/, "").slice(0, 8); }
 
   /* ---------- markdown-lite ---------- */
   function renderInline(text) {
@@ -369,8 +397,139 @@
         state.items.push({ kind: "error", text: msg.message });
         scheduleRender();
         break;
+      case "index":
+        fileIndex = { files: msg.files || [], dirs: msg.dirs || [] };
+        if (menuActive) refreshMentionMenu();
+        break;
+      case "pickedFile":
+        insertMention(msg.path);
+        break;
     }
   });
+
+  /* ---------- @ mention: drill-down directory menu above the input ---------- */
+  var mentionTimer = null;
+  var menuEl = $("mention-menu");
+  var menuItems = [], menuIndex = 0, menuActive = false;
+  var fileIndex = { files: [], dirs: [] };
+  var currentDir = "";
+
+  function mentionMatch(value) {
+    var m = /(?:^|\s)@([^\s@]*)$/.exec(value);
+    return m ? { query: m[1], start: m.index + m[0].indexOf("@") } : null;
+  }
+  function mentionFor(relPath, isDir) {
+    var p = isDir ? relPath + "/" : relPath; // DSH grammar: directories carry a trailing slash
+    return /[\s"]/.test(p) ? '@"' + p + '"' : "@" + p;
+  }
+  function insertMention(relPath, isDir) {
+    var m = mentionMatch(inputEl.value);
+    var mention = mentionFor(relPath, isDir);
+    var before = m ? inputEl.value.slice(0, m.start) : inputEl.value;
+    var after = m ? inputEl.value.slice(m.start + m.query.length + 1) : "";
+    inputEl.value = before + mention + " " + after;
+    inputEl.focus();
+    autoGrow();
+    hideMenu();
+  }
+  function dirParent(d) { var i = d.lastIndexOf("/"); return i < 0 ? "" : d.slice(0, i); }
+  function childrenOf(dir) {
+    var prefix = dir ? dir + "/" : "";
+    var dirs = fileIndex.dirs.filter(function (d) {
+      return d.slice(0, prefix.length) === prefix && d.slice(prefix.length).indexOf("/") < 0;
+    }).sort();
+    var files = fileIndex.files.filter(function (f) {
+      return f.slice(0, prefix.length) === prefix && f.slice(prefix.length).indexOf("/") < 0;
+    }).sort();
+    return { dirs: dirs, files: files };
+  }
+  function menuRows(q) {
+    var v = q.trim().toLowerCase();
+    var c = childrenOf(currentDir);
+    if (v) {
+      var hit = function (p) { return p.toLowerCase().indexOf(v) >= 0 || p.split("/").pop().toLowerCase().indexOf(v) >= 0; };
+      c = { dirs: c.dirs.filter(hit), files: c.files.filter(hit) };
+    }
+    var rows = [];
+    if (currentDir !== "") rows.push({ kind: "up", rel: currentDir, name: "↑ 上级" });
+    c.dirs.forEach(function (d) { rows.push({ kind: "dir", rel: d, name: d.split("/").pop() + "/" }); });
+    c.files.forEach(function (f) { rows.push({ kind: "file", rel: f, name: f.split("/").pop() }); });
+    return rows.slice(0, 60);
+  }
+  function drawBreadcrumbs() {
+    var div = document.createElement("div");
+    div.className = "m-crumbs";
+    if (currentDir === "") {
+      div.innerHTML = "<span class='cur'>工作区</span>";
+    } else {
+      var segs = currentDir.split("/");
+      var root = document.createElement("span");
+      root.textContent = "工作区";
+      root.onclick = function () { currentDir = ""; refreshMentionMenu(); };
+      div.appendChild(root);
+      var acc = "";
+      segs.forEach(function (seg, i) {
+        div.appendChild(document.createTextNode(" / "));
+        acc = acc ? acc + "/" + seg : seg;
+        var s = document.createElement("span");
+        s.textContent = seg;
+        if (i === segs.length - 1) s.className = "cur";
+        else s.onclick = (function (p) { return function () { currentDir = p; refreshMentionMenu(); }; })(acc);
+        div.appendChild(s);
+      });
+    }
+    return div;
+  }
+  function drawMenu() {
+    menuEl.innerHTML = "";
+    menuEl.appendChild(drawBreadcrumbs());
+    menuItems.forEach(function (it, i) {
+      var div = document.createElement("div");
+      div.className = "m-item" + (it.kind === "hint" ? " hint" : "") + (i === menuIndex ? " sel" : "");
+      if (it.kind === "hint") {
+        div.textContent = it.name;
+      } else if (it.kind === "up") {
+        div.textContent = it.name;
+        div.onclick = function () { currentDir = dirParent(currentDir); refreshMentionMenu(); };
+        div.onmouseenter = function () { if (menuIndex !== i) { menuIndex = i; drawMenu(); } };
+      } else {
+        var kind = document.createElement("span");
+        kind.className = "m-kind";
+        kind.textContent = it.kind === "dir" ? "文件夹" : "文件";
+        var name = document.createTextNode("·" + it.name + " ");
+        var p = document.createElement("span");
+        p.className = "m-path";
+        p.textContent = it.rel;
+        div.appendChild(kind);
+        div.appendChild(name);
+        div.appendChild(p);
+        div.onclick = function () {
+          if (it.kind === "dir") { currentDir = it.rel; refreshMentionMenu(); }
+          else insertMention(it.rel, false);
+        };
+        div.onmouseenter = function () { if (menuIndex !== i) { menuIndex = i; drawMenu(); } };
+      }
+      menuEl.appendChild(div);
+    });
+    menuEl.hidden = false;
+  }
+  function showMenu(items) { menuItems = items; menuIndex = 0; menuActive = true; drawMenu(); }
+  function hideMenu() { menuActive = false; menuEl.hidden = true; menuItems = []; }
+  function refreshMentionMenu() {
+    var m = mentionMatch(inputEl.value);
+    if (!m) { hideMenu(); return; }
+    if (fileIndex.files.length === 0 && fileIndex.dirs.length === 0) {
+      showMenu([{ kind: "hint", name: "文件索引加载中…", rel: null }]);
+      post({ type: "refreshFiles" });
+      return;
+    }
+    var items = menuRows(m.query);
+    showMenu(items.length ? items : [{ kind: "hint", name: "无匹配", rel: null }]);
+  }
+  function maybeTriggerMention() {
+    if (mentionTimer) clearTimeout(mentionTimer);
+    mentionTimer = setTimeout(refreshMentionMenu, 120);
+  }
 
   function updateHeader() {
     var s = state.sessions.find(function (x) { return x.sessionId === state.activeSessionId; });
@@ -386,8 +545,10 @@
     state.sessions.forEach(function (sess) {
       var opt = document.createElement("option");
       opt.value = sess.sessionId;
-      var title = state.titles[sess.sessionId];
-      opt.textContent = title ? title : (sess.sessionId.replace(/^session-/, "").slice(0, 8));
+      var title = state.titles[sess.sessionId] || sess.title || "";
+      var label = title ? title : ("会话 " + shortId(sess.sessionId));
+      var time = relTime(sess.updatedAt);
+      opt.textContent = time ? (label + " · " + time) : label;
       if (sess.running) opt.textContent += " ●";
       if (sess.sessionId === state.activeSessionId) opt.selected = true;
       selEl.appendChild(opt);
@@ -404,8 +565,30 @@
     inputEl.style.height = "auto";
     inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + "px";
   }
-  inputEl.addEventListener("input", autoGrow);
+  inputEl.addEventListener("input", function () { autoGrow(); maybeTriggerMention(); });
   inputEl.addEventListener("keydown", function (e) {
+    if (menuActive) {
+      if (e.key === "ArrowDown") { e.preventDefault(); menuIndex = Math.min(menuIndex + 1, menuItems.length - 1); drawMenu(); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); menuIndex = Math.max(menuIndex - 1, 0); drawMenu(); return; }
+      if (e.key === "ArrowLeft") { e.preventDefault(); if (currentDir !== "") { currentDir = dirParent(currentDir); refreshMentionMenu(); } return; }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        var sel = menuItems[menuIndex];
+        if (sel && sel.kind === "dir") { currentDir = sel.rel; refreshMentionMenu(); }
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        var it = menuItems[menuIndex];
+        if (!it) { hideMenu(); return; }
+        if (it.kind === "up") { currentDir = dirParent(currentDir); refreshMentionMenu(); }
+        else if (it.kind === "dir") { currentDir = it.rel; refreshMentionMenu(); }
+        else if (it.kind === "file") insertMention(it.rel, false);
+        else hideMenu();
+        return;
+      }
+      if (e.key === "Escape") { e.preventDefault(); hideMenu(); return; }
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       send();
@@ -415,6 +598,7 @@
   function send() {
     var text = inputEl.value.trim();
     if (!text) return;
+    hideMenu();
     post({ type: "send", text: text });
     inputEl.value = "";
     autoGrow();

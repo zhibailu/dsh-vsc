@@ -54,6 +54,8 @@ export interface SessionSummary {
   origin?: "subagent";
   cwd?: string;
   agentPreset?: string;
+  /** Projection block; `values.title` carries the session title when known. */
+  projections?: { values?: { title?: string | null } };
 }
 
 /** session.prompt content part (text only for the bridge; images later). */

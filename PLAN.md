@@ -9,6 +9,21 @@
 - 复制按钮失效根因：VS Code 拦截 webview 跨源 iframe 的剪贴板 API（microsoft/vscode#182642）→ 原生 GUI 绕开；若保留嵌入需剪贴板桥
 - `@`/`/` 输入是 DSH 原生（ui-input-trigger + ui-skill/ui-reference）→ 原生面板镜像该交互
 - 嵌入 webview 不稳定（选择题点击失效、崩溃实录）→ 支持原生路线
+- **dsh web 无 daemon/服务模式**（CLI 只有 `--host/--port/--trusted-host/--no-open`）→ 服务生命周期由扩展托管（detached spawn + 自愈）
+- **DSH 自带配置通道**（wire 协议）：`settings.describe/update/replace/mutate/openDocument`（分层值 base/user + revision 乐观并发 + `applies: live|restart` 热生效提示）、`credentials.describe/set/unset`（密钥专用，不进明文 yml）、`agentPreset.*`、`llm.*`
+
+## 架构原则：桥接为主，配置只走官方通道
+- **运行时 = 纯桥接**：session/事件/审批/文件/差异——不写任何 DSH 配置
+- **要改 DSH 配置（模型/agent/MCP/设置）→ 只调 wire 的 `settings.`/`credentials.`/`agentPreset.` RPC**：有 schema 校验、有 revision 防互相覆盖、改完 DSH 自己决定 live 热生效还是提示重启
+- **绝不手写/改写 profile YAML**（用户手写层 `cordis.patch.yml` 只读；本扩展不拥有任何配置文件）。唯一例外：修 DSH 自身 bug 且经用户同意（如 GITHUB_TOKEN 加固）
+- **防重复加载的唯一纪律：单 harness 实例**。discovery-first——端口上有活着的 DSH 就复用，绝不双开；配置写入前先 `settings.describe` 查重，幂等 add，`expectedRevision` 保证不覆盖
+- 扩展的 webview 与 DSH 自带 UI 是"两个入口"而非重复资源；原生面板为主，embed 不进主路径
+
+## 服务生命周期（自愈，2025-06 落地）
+- 激活时探测配置端口：活着 → 复用连接；死了且 `dshVsc.autoStart` → detached 隐藏拉起 `dsh web --no-open`
+- 事件流断开 → 3s 宽限后复探 → 真宕机则重新拉起（退避 2/4/8/16/30s）；连续 3 次拉起失败 → 本次会话停止自动重试，命令手动恢复
+- 关 VS Code 不杀服务（共享服务，浏览器 GUI 继续用）；`dsh: Stop` 只停扩展拉起的实例并记住"别自动拉起"，重载/`dsh: Start` 后恢复
+- 慢轮询 15s 兜底：用户手动起了服务也能被自动接上
 
 ## 架构：原生侧边栏面板（主界面）
 - 原生渲染对话：消息/工具调用/折叠，VS Code 主题，注意力设计（不照搬网页样式）

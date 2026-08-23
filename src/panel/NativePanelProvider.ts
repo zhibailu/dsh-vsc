@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { HarnessClient } from "../harness/client";
 import type { HostMessage, PanelEvent, PanelSession, WebviewMessage } from "./protocol";
 
@@ -44,6 +45,12 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         this.post({ type: "event", sessionId, event });
       }
     });
+    // Keep the @ file index fresh.
+    this.context.subscriptions.push(
+      vscode.workspace.onDidChangeWorkspaceFolders(() => void this.buildFileIndex()),
+      vscode.workspace.onDidCreateFiles(() => void this.buildFileIndex()),
+      vscode.workspace.onDidDeleteFiles(() => void this.buildFileIndex())
+    );
   }
 
   /** Called by extension.ts when harness connectivity changes. */
@@ -68,6 +75,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           running: item.running,
           blank: item.blank,
           updatedAt: item.updatedAt,
+          title: item.projections?.values?.title ?? undefined,
         }))
         .sort((a, b) => b.updatedAt - a.updatedAt);
       if (this.sessions.length > 0 && !this.sessions.some((s) => s.sessionId === this.activeSessionId)) {
@@ -93,6 +101,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         if (this.activeSessionId) {
           await this.loadHistory(this.activeSessionId, undefined);
         }
+        await this.buildFileIndex();
         break;
       case "selectSession":
         this.activeSessionId = message.sessionId;
@@ -148,7 +157,46 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       case "refresh":
         await this.refresh();
         break;
+      case "refreshFiles":
+        await this.buildFileIndex();
+        break;
     }
+  }
+
+  /**
+   * Build a workspace file index (files + all ancestor dirs) once and push it
+   * to the panel for LOCAL, millisecond @ filtering. Folders sort before files.
+   */
+  private async buildFileIndex(): Promise<void> {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) {
+      this.post({ type: "index", files: [], dirs: [] });
+      return;
+    }
+    const root = folders[0].uri.fsPath;
+    let uris: vscode.Uri[] = [];
+    try {
+      uris = await vscode.workspace.findFiles(
+        "**/*",
+        "**/{node_modules,dist,.git,out,build,coverage,.vscode-test,.vscode-test-ext}/**",
+        500
+      );
+      uris = uris.filter((uri) => !/\.vsix$/i.test(uri.fsPath));
+    } catch {
+      /* empty list */
+    }
+    const files = uris
+      .map((uri) => path.relative(root, uri.fsPath).replaceAll("\\", "/"))
+      .sort((a, b) => a.localeCompare(b));
+    const dirSet = new Set<string>();
+    for (const file of files) {
+      const parts = file.split("/");
+      for (let i = 1; i < parts.length; i++) {
+        dirSet.add(parts.slice(0, i).join("/"));
+      }
+    }
+    const dirs = [...dirSet].sort((a, b) => a.localeCompare(b));
+    this.post({ type: "index", files, dirs });
   }
 
   /** Load a history page ending before `beforeSeq` (tail when undefined). */
@@ -182,7 +230,8 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       type: "state",
       connected: this.connected,
       version: this.version,
-      sessions: this.sessions.map((s) => ({ ...s, title: this.titles.get(s.sessionId) })),
+      // live title event wins; otherwise the projection title from session.list
+      sessions: this.sessions.map((s) => ({ ...s, title: this.titles.get(s.sessionId) ?? s.title })),
       activeSessionId: this.activeSessionId,
     });
   }
