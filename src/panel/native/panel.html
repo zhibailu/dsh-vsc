@@ -109,6 +109,18 @@
 
   function post(msg) { try { vscode.postMessage(msg); } catch (e) {} }
   function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+  function relTime(ts) {
+    if (!ts) return "";
+    var diff = Date.now() - ts;
+    if (diff < 60e3) return "刚刚";
+    if (diff < 3600e3) return Math.floor(diff / 60e3) + "分钟前";
+    if (diff < 86400e3) return Math.floor(diff / 3600e3) + "小时前";
+    if (diff < 172800e3) return "昨天";
+    if (diff < 604800e3) return Math.floor(diff / 86400e3) + "天前";
+    var d = new Date(ts);
+    return (d.getMonth() + 1) + "-" + d.getDate();
+  }
+  function shortId(id) { return String(id || "").replace(/^session-/, "").slice(0, 8); }
 
   /* ---------- markdown-lite ---------- */
   function renderInline(text) {
@@ -369,8 +381,39 @@
         state.items.push({ kind: "error", text: msg.message });
         scheduleRender();
         break;
+      case "pickedFile": {
+        insertMention(msg.path);
+        break;
+      }
     }
   });
+
+  /* ---------- @ mention ---------- */
+  var mentionTimer = null, mentionQuery = null;
+  function mentionMatch(value) {
+    var m = /(?:^|\s)@([^\s@]*)$/.exec(value);
+    return m ? { query: m[1], start: m.index + m[0].indexOf("@") } : null;
+  }
+  function maybeTriggerMention() {
+    var m = mentionMatch(inputEl.value);
+    if (!m) { mentionQuery = null; return; }
+    if (m.query === mentionQuery) return; // unchanged
+    mentionQuery = m.query;
+    if (mentionTimer) clearTimeout(mentionTimer);
+    mentionTimer = setTimeout(function () { post({ type: "pickFile", query: m.query }); }, 300);
+  }
+  function insertMention(relPath) {
+    var m = mentionMatch(inputEl.value);
+    var mention;
+    if (/[\s"]/.test(relPath)) mention = '@"' + relPath + '"';
+    else mention = "@" + relPath;
+    var before = m ? inputEl.value.slice(0, m.start) : inputEl.value;
+    var after = m ? inputEl.value.slice(m.start + m.query.length + 1) : "";
+    inputEl.value = before + mention + " " + after;
+    inputEl.focus();
+    autoGrow();
+    mentionQuery = null;
+  }
 
   function updateHeader() {
     var s = state.sessions.find(function (x) { return x.sessionId === state.activeSessionId; });
@@ -386,8 +429,10 @@
     state.sessions.forEach(function (sess) {
       var opt = document.createElement("option");
       opt.value = sess.sessionId;
-      var title = state.titles[sess.sessionId];
-      opt.textContent = title ? title : (sess.sessionId.replace(/^session-/, "").slice(0, 8));
+      var title = state.titles[sess.sessionId] || sess.title || "";
+      var label = title ? title : ("会话 " + shortId(sess.sessionId));
+      var time = relTime(sess.updatedAt);
+      opt.textContent = time ? (label + " · " + time) : label;
       if (sess.running) opt.textContent += " ●";
       if (sess.sessionId === state.activeSessionId) opt.selected = true;
       selEl.appendChild(opt);
@@ -404,7 +449,7 @@
     inputEl.style.height = "auto";
     inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + "px";
   }
-  inputEl.addEventListener("input", autoGrow);
+  inputEl.addEventListener("input", function () { autoGrow(); maybeTriggerMention(); });
   inputEl.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();

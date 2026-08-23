@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { HarnessClient } from "../harness/client";
 import type { HostMessage, PanelEvent, PanelSession, WebviewMessage } from "./protocol";
 
@@ -68,6 +69,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           running: item.running,
           blank: item.blank,
           updatedAt: item.updatedAt,
+          title: item.projections?.values?.title ?? undefined,
         }))
         .sort((a, b) => b.updatedAt - a.updatedAt);
       if (this.sessions.length > 0 && !this.sessions.some((s) => s.sessionId === this.activeSessionId)) {
@@ -148,7 +150,56 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       case "refresh":
         await this.refresh();
         break;
+      case "pickFile":
+        await this.openFilePicker(message.query);
+        break;
     }
+  }
+
+  /** VS Code QuickPick over workspace files for `@` mentions (DSH `@path` grammar). */
+  private async openFilePicker(query: string): Promise<void> {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) {
+      this.post({ type: "error", message: "@ 引用需要先打开一个工作区文件夹" });
+      return;
+    }
+    const root = folders[0].uri.fsPath;
+    let uris: vscode.Uri[] = [];
+    try {
+      uris = await vscode.workspace.findFiles(
+        "**/*",
+        "**/{node_modules,dist,.git,out,build,coverage}/**",
+        200
+      );
+    } catch {
+      /* empty list */
+    }
+    const items = uris
+      .map((uri) => {
+        const rel = path.relative(root, uri.fsPath).replaceAll("\\", "/");
+        return { label: path.basename(uri.fsPath), description: rel, rel };
+      })
+      .sort((a, b) => a.rel.localeCompare(b.rel));
+
+    const qp = vscode.window.createQuickPick<{ label: string; description: string; rel: string }>();
+    qp.title = "DSH — @ 引用文件";
+    qp.placeholder = "输入文件名筛选（Enter 选择）";
+    qp.matchOnDescription = true;
+    const applyFilter = (value: string): void => {
+      const v = value.trim().toLowerCase();
+      qp.items = v
+        ? items.filter((i) => i.rel.toLowerCase().includes(v) || i.label.toLowerCase().includes(v))
+        : items;
+    };
+    applyFilter(query);
+    qp.onDidChangeValue(applyFilter);
+    qp.onDidAccept(() => {
+      const pick = qp.selectedItems[0];
+      if (pick) this.post({ type: "pickedFile", path: pick.rel });
+      qp.dispose();
+    });
+    qp.onDidHide(() => qp.dispose());
+    qp.show();
   }
 
   /** Load a history page ending before `beforeSeq` (tail when undefined). */
