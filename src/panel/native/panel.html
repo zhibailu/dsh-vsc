@@ -62,7 +62,15 @@
   .sys-err { margin: 6px 0; padding: 6px 10px; border-left: 3px solid var(--err); color: var(--err); white-space: pre-wrap; font-size: 12px; }
   .empty { color: var(--muted); text-align: center; margin-top: 40px; font-size: 12px; line-height: 2; }
 
-  footer { flex: none; border-top: 1px solid var(--border); padding: 6px 8px; }
+  footer { flex: none; position: relative; border-top: 1px solid var(--border); padding: 6px 8px; }
+  #mention-menu { position: absolute; bottom: 100%; left: 8px; right: 8px; max-height: 40vh; overflow-y: auto;
+    background: var(--vscode-quickInput-background, var(--input-bg)); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 4px; z-index: 20; font-size: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.35); }
+  .m-item { padding: 4px 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .m-item.sel { background: var(--vscode-list-activeSelectionBackground, #094771);
+                color: var(--vscode-list-activeSelectionForeground, #ffffff); }
+  .m-item.hint { color: var(--muted); cursor: default; }
   #input-status { font-size: 11px; color: var(--muted); min-height: 16px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #input-row { display: flex; gap: 6px; align-items: flex-end; }
   #input { flex: 1; resize: none; background: var(--input-bg); color: var(--fg); border: 1px solid var(--border);
@@ -83,6 +91,7 @@
   </header>
   <main id="messages"></main>
   <footer>
+    <div id="mention-menu" hidden></div>
     <div id="input-status"></div>
     <div id="input-row">
       <textarea id="input" rows="1" placeholder="发消息…（Enter 发送，Shift+Enter 换行）"></textarea>
@@ -381,38 +390,75 @@
         state.items.push({ kind: "error", text: msg.message });
         scheduleRender();
         break;
-      case "pickedFile": {
+      case "files":
+        fileIndex = msg.files || [];
+        if (menuActive) refreshMentionMenu();
+        break;
+      case "pickedFile":
         insertMention(msg.path);
         break;
-      }
     }
   });
 
-  /* ---------- @ mention ---------- */
-  var mentionTimer = null, mentionQuery = null;
+  /* ---------- @ mention: inline menu above the input ---------- */
+  var mentionTimer = null;
+  var menuEl = $("mention-menu");
+  var menuItems = [], menuIndex = 0, menuActive = false;
+  var fileIndex = [];
+
   function mentionMatch(value) {
     var m = /(?:^|\s)@([^\s@]*)$/.exec(value);
     return m ? { query: m[1], start: m.index + m[0].indexOf("@") } : null;
   }
-  function maybeTriggerMention() {
-    var m = mentionMatch(inputEl.value);
-    if (!m) { mentionQuery = null; return; }
-    if (m.query === mentionQuery) return; // unchanged
-    mentionQuery = m.query;
-    if (mentionTimer) clearTimeout(mentionTimer);
-    mentionTimer = setTimeout(function () { post({ type: "pickFile", query: m.query }); }, 300);
-  }
   function insertMention(relPath) {
     var m = mentionMatch(inputEl.value);
-    var mention;
-    if (/[\s"]/.test(relPath)) mention = '@"' + relPath + '"';
-    else mention = "@" + relPath;
+    var mention = /[\s"]/.test(relPath) ? '@"' + relPath + '"' : "@" + relPath;
     var before = m ? inputEl.value.slice(0, m.start) : inputEl.value;
     var after = m ? inputEl.value.slice(m.start + m.query.length + 1) : "";
     inputEl.value = before + mention + " " + after;
     inputEl.focus();
     autoGrow();
-    mentionQuery = null;
+    hideMenu();
+  }
+  function filteredFiles(q) {
+    var v = q.trim().toLowerCase();
+    var list = v
+      ? fileIndex.filter(function (f) {
+          return f.toLowerCase().indexOf(v) >= 0 || f.split("/").pop().toLowerCase().indexOf(v) >= 0;
+        })
+      : fileIndex;
+    return list.slice(0, 50);
+  }
+  function drawMenu() {
+    menuEl.innerHTML = "";
+    menuItems.forEach(function (it, i) {
+      var div = document.createElement("div");
+      div.className = "m-item" + (it.value === null ? " hint" : "") + (i === menuIndex ? " sel" : "");
+      div.textContent = it.label;
+      if (it.value !== null) {
+        div.onclick = function () { insertMention(it.value); };
+        div.onmouseenter = function () { if (menuIndex !== i) { menuIndex = i; drawMenu(); } };
+      }
+      menuEl.appendChild(div);
+    });
+    menuEl.hidden = false;
+  }
+  function showMenu(items) { menuItems = items; menuIndex = 0; menuActive = true; drawMenu(); }
+  function hideMenu() { menuActive = false; menuEl.hidden = true; menuItems = []; }
+  function refreshMentionMenu() {
+    var m = mentionMatch(inputEl.value);
+    if (!m) { hideMenu(); return; }
+    if (fileIndex.length === 0) {
+      showMenu([{ label: "文件索引加载中…", value: null }]);
+      post({ type: "refreshFiles" });
+      return;
+    }
+    var items = filteredFiles(m.query).map(function (f) { return { label: f, value: f }; });
+    showMenu(items.length ? items : [{ label: "无匹配文件", value: null }]);
+  }
+  function maybeTriggerMention() {
+    if (mentionTimer) clearTimeout(mentionTimer);
+    mentionTimer = setTimeout(refreshMentionMenu, 120);
   }
 
   function updateHeader() {
@@ -451,6 +497,17 @@
   }
   inputEl.addEventListener("input", function () { autoGrow(); maybeTriggerMention(); });
   inputEl.addEventListener("keydown", function (e) {
+    if (menuActive) {
+      if (e.key === "ArrowDown") { e.preventDefault(); menuIndex = Math.min(menuIndex + 1, menuItems.length - 1); drawMenu(); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); menuIndex = Math.max(menuIndex - 1, 0); drawMenu(); return; }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        var it = menuItems[menuIndex];
+        if (it && it.value !== null) insertMention(it.value); else hideMenu();
+        return;
+      }
+      if (e.key === "Escape") { e.preventDefault(); hideMenu(); return; }
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       send();
@@ -460,6 +517,7 @@
   function send() {
     var text = inputEl.value.trim();
     if (!text) return;
+    hideMenu();
     post({ type: "send", text: text });
     inputEl.value = "";
     autoGrow();

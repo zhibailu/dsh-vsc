@@ -45,6 +45,12 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         this.post({ type: "event", sessionId, event });
       }
     });
+    // Keep the @ file index fresh.
+    this.context.subscriptions.push(
+      vscode.workspace.onDidChangeWorkspaceFolders(() => void this.buildFileIndex()),
+      vscode.workspace.onDidCreateFiles(() => void this.buildFileIndex()),
+      vscode.workspace.onDidDeleteFiles(() => void this.buildFileIndex())
+    );
   }
 
   /** Called by extension.ts when harness connectivity changes. */
@@ -95,6 +101,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         if (this.activeSessionId) {
           await this.loadHistory(this.activeSessionId, undefined);
         }
+        await this.buildFileIndex();
         break;
       case "selectSession":
         this.activeSessionId = message.sessionId;
@@ -150,17 +157,20 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       case "refresh":
         await this.refresh();
         break;
-      case "pickFile":
-        await this.openFilePicker(message.query);
+      case "refreshFiles":
+        await this.buildFileIndex();
         break;
     }
   }
 
-  /** VS Code QuickPick over workspace files for `@` mentions (DSH `@path` grammar). */
-  private async openFilePicker(query: string): Promise<void> {
+  /**
+   * Build a workspace file index once and push it to the panel for LOCAL,
+   * millisecond @ filtering (no per-keystroke host round-trip).
+   */
+  private async buildFileIndex(): Promise<void> {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) {
-      this.post({ type: "error", message: "@ 引用需要先打开一个工作区文件夹" });
+      this.post({ type: "files", files: [] });
       return;
     }
     const root = folders[0].uri.fsPath;
@@ -169,37 +179,15 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       uris = await vscode.workspace.findFiles(
         "**/*",
         "**/{node_modules,dist,.git,out,build,coverage}/**",
-        200
+        500
       );
     } catch {
       /* empty list */
     }
-    const items = uris
-      .map((uri) => {
-        const rel = path.relative(root, uri.fsPath).replaceAll("\\", "/");
-        return { label: path.basename(uri.fsPath), description: rel, rel };
-      })
-      .sort((a, b) => a.rel.localeCompare(b.rel));
-
-    const qp = vscode.window.createQuickPick<{ label: string; description: string; rel: string }>();
-    qp.title = "DSH — @ 引用文件";
-    qp.placeholder = "输入文件名筛选（Enter 选择）";
-    qp.matchOnDescription = true;
-    const applyFilter = (value: string): void => {
-      const v = value.trim().toLowerCase();
-      qp.items = v
-        ? items.filter((i) => i.rel.toLowerCase().includes(v) || i.label.toLowerCase().includes(v))
-        : items;
-    };
-    applyFilter(query);
-    qp.onDidChangeValue(applyFilter);
-    qp.onDidAccept(() => {
-      const pick = qp.selectedItems[0];
-      if (pick) this.post({ type: "pickedFile", path: pick.rel });
-      qp.dispose();
-    });
-    qp.onDidHide(() => qp.dispose());
-    qp.show();
+    const files = uris
+      .map((uri) => path.relative(root, uri.fsPath).replaceAll("\\", "/"))
+      .sort((a, b) => a.localeCompare(b));
+    this.post({ type: "files", files });
   }
 
   /** Load a history page ending before `beforeSeq` (tail when undefined). */
@@ -233,7 +221,8 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       type: "state",
       connected: this.connected,
       version: this.version,
-      sessions: this.sessions.map((s) => ({ ...s, title: this.titles.get(s.sessionId) })),
+      // live title event wins; otherwise the projection title from session.list
+      sessions: this.sessions.map((s) => ({ ...s, title: this.titles.get(s.sessionId) ?? s.title })),
       activeSessionId: this.activeSessionId,
     });
   }

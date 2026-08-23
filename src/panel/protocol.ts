@@ -24,6 +24,7 @@ export type HostMessage =
   | { type: "history"; sessionId: string; events: PanelEvent[]; hasMore: boolean }
   | { type: "running"; sessionId: string; running: boolean }
   | { type: "pickedFile"; path: string }
+  | { type: "files"; files: string[] }
   | { type: "error"; message: string };
 
 /** Webview → host messages. */
@@ -35,7 +36,7 @@ export type WebviewMessage =
   | { type: "loadOlder"; beforeSeq: number }
   | { type: "cancel" }
   | { type: "refresh" }
-  | { type: "pickFile"; query: string };
+  | { type: "refreshFiles" };
 
 export interface PanelSession {
   sessionId: string;
