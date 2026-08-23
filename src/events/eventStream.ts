@@ -21,6 +21,10 @@ export class HarnessEventStream implements vscode.Disposable {
 
   onSessionEvent: (sessionId: string, event: SessionEvent) => void = () => {};
   onError: (message: string) => void = () => {};
+  /** Fired when a (re)connection succeeds — status bar can flip back online. */
+  onOpen: () => void = () => {};
+  /** Fired when the connection drops — the harness may be down; host decides. */
+  onDisconnect: () => void = () => {};
 
   start(): void {
     this.connect();
@@ -34,14 +38,20 @@ export class HarnessEventStream implements vscode.Disposable {
       this.ws = ws;
       ws.onopen = () => {
         this.retries = 0;
+        this.onOpen();
       };
       ws.onmessage = (msg) => this.handleFrame(msg.data);
-      ws.onclose = () => this.scheduleReconnect();
+      ws.onclose = () => {
+        if (this.disposed) return;
+        this.onDisconnect();
+        this.scheduleReconnect();
+      };
       ws.onerror = () => {
         /* onclose follows */
       };
     } catch (error) {
       this.onError(String(error));
+      this.onDisconnect();
       this.scheduleReconnect();
     }
   }
