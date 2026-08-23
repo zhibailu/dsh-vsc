@@ -24,7 +24,7 @@ export type HostMessage =
   | { type: "history"; sessionId: string; events: PanelEvent[]; hasMore: boolean }
   | { type: "running"; sessionId: string; running: boolean }
   | { type: "pickedFile"; path: string }
-  | { type: "files"; files: string[] }
+  | { type: "index"; files: string[]; dirs: string[] }
   | { type: "error"; message: string };
 
 /** Webview → host messages. */

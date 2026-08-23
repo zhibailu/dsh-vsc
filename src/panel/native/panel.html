@@ -71,6 +71,8 @@
   .m-item.sel { background: var(--vscode-list-activeSelectionBackground, #094771);
                 color: var(--vscode-list-activeSelectionForeground, #ffffff); }
   .m-item.hint { color: var(--muted); cursor: default; }
+  .m-kind { opacity: .5; margin-right: 2px; }
+  .m-path { opacity: .6; margin-left: 8px; font-size: 11px; }
   #input-status { font-size: 11px; color: var(--muted); min-height: 16px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #input-row { display: flex; gap: 6px; align-items: flex-end; }
   #input { flex: 1; resize: none; background: var(--input-bg); color: var(--fg); border: 1px solid var(--border);
@@ -390,8 +392,8 @@
         state.items.push({ kind: "error", text: msg.message });
         scheduleRender();
         break;
-      case "files":
-        fileIndex = msg.files || [];
+      case "index":
+        fileIndex = { files: msg.files || [], dirs: msg.dirs || [] };
         if (menuActive) refreshMentionMenu();
         break;
       case "pickedFile":
@@ -404,15 +406,19 @@
   var mentionTimer = null;
   var menuEl = $("mention-menu");
   var menuItems = [], menuIndex = 0, menuActive = false;
-  var fileIndex = [];
+  var fileIndex = { files: [], dirs: [] };
 
   function mentionMatch(value) {
     var m = /(?:^|\s)@([^\s@]*)$/.exec(value);
     return m ? { query: m[1], start: m.index + m[0].indexOf("@") } : null;
   }
-  function insertMention(relPath) {
+  function mentionFor(relPath, isDir) {
+    var p = isDir ? relPath + "/" : relPath; // DSH grammar: directories carry a trailing slash
+    return /[\s"]/.test(p) ? '@"' + p + '"' : "@" + p;
+  }
+  function insertMention(relPath, isDir) {
     var m = mentionMatch(inputEl.value);
-    var mention = /[\s"]/.test(relPath) ? '@"' + relPath + '"' : "@" + relPath;
+    var mention = mentionFor(relPath, isDir);
     var before = m ? inputEl.value.slice(0, m.start) : inputEl.value;
     var after = m ? inputEl.value.slice(m.start + m.query.length + 1) : "";
     inputEl.value = before + mention + " " + after;
@@ -420,23 +426,37 @@
     autoGrow();
     hideMenu();
   }
-  function filteredFiles(q) {
+  function filteredItems(q) {
     var v = q.trim().toLowerCase();
-    var list = v
-      ? fileIndex.filter(function (f) {
-          return f.toLowerCase().indexOf(v) >= 0 || f.split("/").pop().toLowerCase().indexOf(v) >= 0;
-        })
-      : fileIndex;
-    return list.slice(0, 50);
+    var hit = function (p) {
+      return !v || p.toLowerCase().indexOf(v) >= 0 || p.split("/").pop().toLowerCase().indexOf(v) >= 0;
+    };
+    var dirs = fileIndex.dirs.filter(hit).slice(0, 40);
+    var files = fileIndex.files.filter(hit).slice(0, 20);
+    var rows = [];
+    dirs.forEach(function (d) { rows.push({ rel: d, isDir: true }); });
+    files.forEach(function (f) { rows.push({ rel: f, isDir: false }); });
+    return rows;
   }
   function drawMenu() {
     menuEl.innerHTML = "";
     menuItems.forEach(function (it, i) {
       var div = document.createElement("div");
-      div.className = "m-item" + (it.value === null ? " hint" : "") + (i === menuIndex ? " sel" : "");
-      div.textContent = it.label;
-      if (it.value !== null) {
-        div.onclick = function () { insertMention(it.value); };
+      div.className = "m-item" + (it.rel === null ? " hint" : "") + (i === menuIndex ? " sel" : "");
+      if (it.rel === null) {
+        div.textContent = it.label;
+      } else {
+        var kind = document.createElement("span");
+        kind.className = "m-kind";
+        kind.textContent = it.isDir ? "文件夹" : "文件";
+        var name = document.createTextNode("·" + it.rel.split("/").pop() + (it.isDir ? "/" : "") + " ");
+        var p = document.createElement("span");
+        p.className = "m-path";
+        p.textContent = it.rel;
+        div.appendChild(kind);
+        div.appendChild(name);
+        div.appendChild(p);
+        div.onclick = function () { insertMention(it.rel, it.isDir); };
         div.onmouseenter = function () { if (menuIndex !== i) { menuIndex = i; drawMenu(); } };
       }
       menuEl.appendChild(div);
@@ -448,13 +468,13 @@
   function refreshMentionMenu() {
     var m = mentionMatch(inputEl.value);
     if (!m) { hideMenu(); return; }
-    if (fileIndex.length === 0) {
-      showMenu([{ label: "文件索引加载中…", value: null }]);
+    if (fileIndex.files.length === 0 && fileIndex.dirs.length === 0) {
+      showMenu([{ label: "文件索引加载中…", rel: null }]);
       post({ type: "refreshFiles" });
       return;
     }
-    var items = filteredFiles(m.query).map(function (f) { return { label: f, value: f }; });
-    showMenu(items.length ? items : [{ label: "无匹配文件", value: null }]);
+    var items = filteredItems(m.query);
+    showMenu(items.length ? items : [{ label: "无匹配", rel: null }]);
   }
   function maybeTriggerMention() {
     if (mentionTimer) clearTimeout(mentionTimer);
@@ -503,7 +523,7 @@
       if (e.key === "Enter") {
         e.preventDefault();
         var it = menuItems[menuIndex];
-        if (it && it.value !== null) insertMention(it.value); else hideMenu();
+        if (it && it.rel !== null) insertMention(it.rel, it.isDir); else hideMenu();
         return;
       }
       if (e.key === "Escape") { e.preventDefault(); hideMenu(); return; }

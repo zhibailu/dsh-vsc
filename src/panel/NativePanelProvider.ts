@@ -164,13 +164,13 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Build a workspace file index once and push it to the panel for LOCAL,
-   * millisecond @ filtering (no per-keystroke host round-trip).
+   * Build a workspace file index (files + all ancestor dirs) once and push it
+   * to the panel for LOCAL, millisecond @ filtering. Folders sort before files.
    */
   private async buildFileIndex(): Promise<void> {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) {
-      this.post({ type: "files", files: [] });
+      this.post({ type: "index", files: [], dirs: [] });
       return;
     }
     const root = folders[0].uri.fsPath;
@@ -178,16 +178,25 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     try {
       uris = await vscode.workspace.findFiles(
         "**/*",
-        "**/{node_modules,dist,.git,out,build,coverage}/**",
+        "**/{node_modules,dist,.git,out,build,coverage,.vscode-test,.vscode-test-ext}/**",
         500
       );
+      uris = uris.filter((uri) => !/\.vsix$/i.test(uri.fsPath));
     } catch {
       /* empty list */
     }
     const files = uris
       .map((uri) => path.relative(root, uri.fsPath).replaceAll("\\", "/"))
       .sort((a, b) => a.localeCompare(b));
-    this.post({ type: "files", files });
+    const dirSet = new Set<string>();
+    for (const file of files) {
+      const parts = file.split("/");
+      for (let i = 1; i < parts.length; i++) {
+        dirSet.add(parts.slice(0, i).join("/"));
+      }
+    }
+    const dirs = [...dirSet].sort((a, b) => a.localeCompare(b));
+    this.post({ type: "index", files, dirs });
   }
 
   /** Load a history page ending before `beforeSeq` (tail when undefined). */
