@@ -55,7 +55,27 @@ export interface SessionSummary {
   cwd?: string;
   agentPreset?: string;
   /** Projection block; `values.title` carries the session title when known. */
-  projections?: { values?: { title?: string | null } };
+  projections?: {
+    values?: {
+      title?: string | null;
+      tokenUsage?: {
+        uncachedInputTokens?: number;
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
+        outputTokens?: number;
+      } | null;
+      sessionStats?: {
+        turns?: number;
+        steps?: number;
+        llmMs?: number;
+        toolMs?: number;
+        ttftMs?: number;
+        ttftSteps?: number;
+        decodeMs?: number;
+        decodeTokens?: number;
+      } | null;
+    };
+  };
 }
 
 /** session.prompt content part (text only for the bridge; images later). */
@@ -71,4 +91,21 @@ export const METHODS = {
   sessionCreate: "session.create",
   sessionPrompt: "session.prompt",
   sessionCancel: "session.cancel",
+  sessionModels: "session.models",
+  sessionSelectModel: "session.selectModel",
+  sessionUpdateQueue: "session.updateQueue",
 } as const;
+
+/** session.updateQueue action (edit/remove/steer a queued message). */
+export type QueueAction =
+  | { kind: "remove" }
+  | { kind: "steer" }
+  | { kind: "edit"; content: { type: string; text?: string }[] };
+
+/** session.models response value (provider groups + current selection). */
+export interface ModelCatalog {
+  current?: { provider: string; model: string; reasoningEffort?: string };
+  routable: boolean;
+  groups: { id: string; name: string; models: { id: string; name: string; description?: string }[] }[];
+  failures: { id: string; name: string; message: string }[];
+}

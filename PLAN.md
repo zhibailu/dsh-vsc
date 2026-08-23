@@ -11,6 +11,7 @@
 - 嵌入 webview 不稳定（选择题点击失效、崩溃实录）→ 支持原生路线
 - **dsh web 无 daemon/服务模式**（CLI 只有 `--host/--port/--trusted-host/--no-open`）→ 服务生命周期由扩展托管（detached spawn + 自愈）
 - **DSH 自带配置通道**（wire 协议）：`settings.describe/update/replace/mutate/openDocument`（分层值 base/user + revision 乐观并发 + `applies: live|restart` 热生效提示）、`credentials.describe/set/unset`（密钥专用，不进明文 yml）、`agentPreset.*`、`llm.*`
+- **DSH 工具执行弹窗根因 + 补丁（2025-06 落地）**：所有工具命令统一走 `dsh-subprocess-local` 的 spawn（缺 `windowsHide` → powershell 自带可见控制台）；沙箱受限令牌下 `CREATE_NO_WINDOW` 会崩（DSH 注释确认），改用 `STARTF_USESHOWWINDOW|SW_HIDE` 隐藏控制台。已打两层补丁，`scripts/patch-dsh-windowless.ps1` 幂等重打（`npm update -g` 会覆盖）
 
 ## 架构原则：桥接为主，配置只走官方通道
 - **运行时 = 纯桥接**：session/事件/审批/文件/差异——不写任何 DSH 配置

@@ -1,5 +1,6 @@
-# Self-heal lifecycle test: auto-start on empty port, respawn after kill.
-# Always cleans up (dev host + spawned harness + test dirs), even on failure.
+# Self-heal lifecycle test: auto-start on empty port, respawn after kill,
+# windowless launch assertion. Always cleans up (dev host + spawned harness +
+# test dirs), even on failure.
 $ErrorActionPreference = "Continue"
 $root = "D:\MyProject\dshsandbox"
 $ud = Join-Path $root ".vscode-test"
@@ -15,9 +16,32 @@ function Invoke-Api([string]$u) {
   try { $r = Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 4; return "$($r.StatusCode)" } catch { return "ERR $($_.Exception.Message)" }
 }
 
+# Any process in the harness tree that owns a visible top-level window?
+function Test-HarnessWindows([int]$rootPid) {
+  $all = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+  $tree = New-Object System.Collections.Generic.List[int]
+  $tree.Add($rootPid)
+  for ($i = 0; $i -lt $tree.Count; $i++) {
+    foreach ($c in ($all | Where-Object { $_.ParentProcessId -eq $tree[$i] })) {
+      if (-not $tree.Contains([int]$c.ProcessId)) { $tree.Add([int]$c.ProcessId) }
+    }
+  }
+  return Get-Process -ErrorAction SilentlyContinue | Where-Object { $tree -contains $_.Id -and $_.MainWindowHandle -ne 0 }
+}
+
+# Kill EVERY dev-host process of this test (code.cmd exits early and orphans
+# Code.exe, which then holds the user-data-dir singleton + debugging port).
+function Kill-TestCode {
+  $pids = Get-CimInstance Win32_Process -Filter "Name='Code.exe'" -ErrorAction SilentlyContinue |
+          Where-Object { $_.CommandLine -match "vscode-test" } | ForEach-Object { $_.ProcessId }
+  foreach ($procId in $pids) { & taskkill /PID $procId /T /F 2>&1 | Out-Null }
+  Start-Sleep -Milliseconds 500
+}
+
 $hostProc = $null
 try {
-  # 0. clear any leftover test harness on the port (never the user's real one: that is on 3080)
+  # 0. clear leftovers from any aborted run (test Code tree, harness on the port)
+  Kill-TestCode
   $left = Probe-Port $port
   if ($left) { Write-Host "[step] cleaning leftover test harness pid $left"; & taskkill /PID $left /T /F 2>&1 | Out-Null; Start-Sleep -Seconds 1 }
 
@@ -58,7 +82,25 @@ try {
     Start-Sleep -Seconds 1
     if (Probe-Port $port) { $upAt = (Get-Date); Write-Host "[ok] harness UP after ~$($i+1)s - auto-start works"; break }
   }
-  if (-not $upAt) { Write-Host "[FAIL] harness never came up on $port"; return }
+  if (-not $upAt) {
+    Write-Host "[FAIL] harness never came up on $port"
+    $logFiles = Get-ChildItem -Path (Join-Path $ud "logs") -Recurse -Include "*.log","*DSH*" -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 5
+    foreach ($lf in $logFiles) {
+      Write-Host "--- $($lf.FullName) ---"
+      Get-Content $lf.FullName -Tail 40 -ErrorAction SilentlyContinue
+    }
+    return
+  }
+
+  # 5b. windowless check: no process in the harness tree may own a visible window
+  $upPid = Probe-Port $port
+  $winning = Test-HarnessWindows $upPid
+  if ($winning) {
+    Write-Host "[FAIL] visible window in harness tree: $( (($winning | ForEach-Object { "$($_.ProcessName)#$($_.Id)" }) -join ', ') )"
+  } else {
+    Write-Host "[ok] no visible window anywhere in the harness tree (windowless launch confirmed)"
+  }
 
   # 6. kill whatever listens on the port (the whole tree)
   $pid1 = Probe-Port $port
@@ -96,8 +138,8 @@ try {
   }
 }
 finally {
-  # 10. cleanup ALWAYS: dev host, spawned harness, test dirs
-  if ($hostProc) { & taskkill /PID $hostProc.Id /T /F 2>&1 | Out-Null }
+  # 10. cleanup ALWAYS: dev host (whole test Code tree), spawned harness, test dirs
+  Kill-TestCode
   $last = Probe-Port $port
   if ($last) { & taskkill /PID $last /T /F 2>&1 | Out-Null; Write-Host "[cleanup] killed stray harness pid $last" }
   Remove-Item $ud -Recurse -Force -ErrorAction SilentlyContinue

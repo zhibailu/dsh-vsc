@@ -32,6 +32,15 @@
   #new-session { flex: none; width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 2px;
                  background: transparent; color: var(--fg); cursor: pointer; }
   #new-session:hover { background: var(--input-bg); }
+  #model-select { flex: none; max-width: 120px; background: var(--input-bg); color: var(--fg);
+                  border: 1px solid var(--border); border-radius: 2px; padding: 2px 4px; font-size: 12px; }
+
+  #attach-row { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 4px; }
+  .attach-chip { display: flex; align-items: center; gap: 4px; max-width: 180px; border: 1px solid var(--border);
+                 border-radius: 3px; padding: 2px 4px; background: var(--input-bg); font-size: 11px; }
+  .attach-chip img { width: 22px; height: 22px; object-fit: cover; border-radius: 2px; flex: none; }
+  .attach-chip .aname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .attach-chip .ax { cursor: pointer; color: var(--err); font-weight: 700; padding: 0 2px; }
 
   #messages { flex: 1; overflow-y: auto; padding: 8px 10px; }
   .turn-sep { display: flex; align-items: center; gap: 8px; margin: 14px 0 8px; color: var(--muted); font-size: 11px; }
@@ -88,20 +97,39 @@
   .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
   .btn.primary:disabled { opacity: .5; cursor: default; }
   #cancel { color: var(--err); }
+
+  #queue-row { display: flex; flex-direction: column; gap: 4px; padding-bottom: 4px; }
+  .q-item { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 3px;
+            padding: 3px 6px; background: var(--input-bg); font-size: 12px; }
+  .q-item .qtag { font-size: 10px; color: var(--muted); flex: none; }
+  .q-item .qtext { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+  .q-item .qbtn { flex: none; cursor: pointer; color: var(--muted); padding: 0 3px; border: none; background: none; font-size: 11px; }
+  .q-item .qbtn:hover { color: var(--fg); }
+  .q-item .qbtn.danger:hover { color: var(--err); }
+
+  .msg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+  .msg-actions button { cursor: pointer; background: none; border: none; color: var(--muted); font-size: 11px; padding: 0 2px; }
+  .msg-actions button:hover { color: var(--fg); }
+  .edit-box { width: 100%; box-sizing: border-box; background: var(--input-bg); color: var(--fg);
+              border: 1px solid var(--accent); border-radius: 3px; padding: 6px 8px;
+              font-family: inherit; font-size: 13px; resize: vertical; min-height: 60px; }
 </style>
 </head>
 <body>
   <header>
     <span id="pill" class="pill off">○</span>
     <select id="session-select" title="切换会话"></select>
+    <select id="model-select" title="切换模型" hidden></select>
     <button id="new-session" title="新会话">＋</button>
   </header>
   <main id="messages"></main>
   <footer>
     <div id="mention-menu" hidden></div>
+    <div id="attach-row" hidden></div>
+    <div id="queue-row" hidden></div>
     <div id="input-status"></div>
     <div id="input-row">
-      <textarea id="input" rows="1" placeholder="发消息…（Enter 发送，Shift+Enter 换行）"></textarea>
+      <textarea id="input" rows="1" placeholder="发消息…（Enter 发送，运行中自动排队；Shift+Enter 换行；Ctrl+V 粘图片）"></textarea>
       <button id="send" class="btn primary" title="发送">➤</button>
       <button id="cancel" class="btn" title="停止当前回合" hidden>✕</button>
     </div>
@@ -112,6 +140,7 @@
   var vscode = acquireVsCodeApi();
   var $ = function (id) { return document.getElementById(id); };
   var messagesEl = $("messages"), pillEl = $("pill"), selEl = $("session-select"),
+      modelEl = $("model-select"), attachEl = $("attach-row"), queueEl = $("queue-row"),
       inputEl = $("input"), sendBtn = $("send"), cancelBtn = $("cancel"), statusEl = $("input-status");
 
   var state = {
@@ -120,7 +149,11 @@
     items: [], seqs: new Set(), oldestSeq: Infinity,
     running: false, lastTurn: -1,
     curAssistant: null, openBlocks: [],
-    titles: {}
+    titles: {},
+    models: null,            // { current: {provider, model}, groups: [...] }
+    usage: null,             // active session tokenUsage projection
+    queue: [],               // session/queue snapshot for the active session
+    turnStart: 0, firstTokenAt: 0, turnOutput: 0
   };
 
   function post(msg) { try { vscode.postMessage(msg); } catch (e) {} }
@@ -223,11 +256,19 @@
       case "turn/start":
         finalizeStream();
         state.lastTurn = typeof d.turn === "number" ? d.turn : state.lastTurn + 1;
+        state.turnStart = performance.now(); state.firstTokenAt = 0; state.turnOutput = 0;
         state.items.push({ kind: "turn", turn: state.lastTurn, done: false });
         break;
       case "user/message": {
-        var u = textBlocksOf(d.message);
-        if (u) state.items.push({ kind: "user", text: u });
+        // user/message carries content at data.content (assistant/message wraps
+        // it under data.message) — accept either shape.
+        var msg = d.message || d;
+        var u = textBlocksOf(msg);
+        if (u) {
+          var last = state.items[state.items.length - 1];
+          if (last && last.kind === "user" && last.pending) { last.text = u; last.pending = false; last.turn = d.turn; }
+          else state.items.push({ kind: "user", text: u, turn: d.turn });
+        }
         break;
       }
       case "assistant/chunk": {
@@ -235,7 +276,10 @@
         ensureAssistant();
         if (chunk.type === "block-start") {
           state.openBlocks[chunk.index] = { type: chunk.blockType || "text", text: "" };
+        } else if (chunk.type === "usage") {
+          if (chunk.usage && typeof chunk.usage.outputTokens === "number") state.turnOutput = chunk.usage.outputTokens;
         } else if (chunk.type === "text-delta" || chunk.type === "reasoning-delta") {
+          if (!state.firstTokenAt) state.firstTokenAt = performance.now();
           var b = state.openBlocks[chunk.index] || (state.openBlocks[chunk.index] = { type: chunk.type === "reasoning-delta" ? "reasoning" : "text", text: "" });
           if (chunk.text) b.text += chunk.text;
           syncAssistantFromBlocks();
@@ -282,14 +326,32 @@
   }
 
   /* ---------- rendering (rAF-throttled full rebuild) ---------- */
-  var dirty = false, nearBottom = true;
-  function scheduleRender() { if (dirty) return; dirty = true; requestAnimationFrame(render); }
-  function scrollPos() {
-    return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 60;
+  var dirty = false, forceBottom = true, suspended = false;
+  function scheduleRender() {
+    // While the user is reading history mid-turn the DOM is frozen; events
+    // keep folding into state.items in memory, and the next render happens
+    // when they scroll back to the bottom (or the view resets).
+    if (suspended) return;
+    if (dirty) return;
+    dirty = true;
+    requestAnimationFrame(render);
   }
+  function scrollPos() {
+    return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 20;
+  }
+  messagesEl.addEventListener("scroll", function () {
+    if (suspended && scrollPos()) {
+      suspended = false;
+      scheduleRender();
+    }
+  });
   function render() {
     dirty = false;
-    var stick = scrollPos();
+    var stick = forceBottom || scrollPos();
+    forceBottom = false;
+    if (!stick && state.running) { suspended = true; return; }
+    var prevTop = messagesEl.scrollTop;
+    var prevHeight = messagesEl.scrollHeight;
     var frag = document.createDocumentFragment();
 
     if (!state.connected) {
@@ -303,7 +365,14 @@
     }
     messagesEl.innerHTML = "";
     messagesEl.appendChild(frag);
-    if (stick || nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (stick) {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    } else {
+      // User scrolled away from the bottom (e.g. reading history mid-turn):
+      // keep the same content anchored instead of yanking down.
+      messagesEl.scrollTop = prevTop + (messagesEl.scrollHeight - prevHeight);
+    }
+    updateStatusLine();
   }
   function emptyDiv(html) { var d = document.createElement("div"); d.className = "empty"; d.innerHTML = html; return d; }
 
@@ -317,7 +386,56 @@
       }
       case "user": {
         el.className = "msg user";
-        el.innerHTML = "<div class='body'>" + renderInline(item.text) + "</div>";
+        if (item.editing) {
+          var ta = document.createElement("textarea");
+          ta.className = "edit-box";
+          ta.value = item.text;
+          var act = document.createElement("div");
+          act.className = "msg-actions";
+          var save = document.createElement("button");
+          save.textContent = "保存（打断生效）";
+          var cancel = document.createElement("button");
+          cancel.textContent = "取消";
+          act.appendChild(save);
+          act.appendChild(cancel);
+          var body = document.createElement("div");
+          body.className = "body";
+          body.style.maxWidth = "92%";
+          body.appendChild(ta);
+          body.appendChild(act);
+          el.appendChild(body);
+          save.onclick = function () {
+            var v = ta.value.trim();
+            if (!v) return;
+            item.editing = false;
+            item.text = v;
+            post({ type: "send", text: v, mode: "steer" });
+            scheduleRender();
+          };
+          cancel.onclick = function () { item.editing = false; scheduleRender(); };
+          ta.addEventListener("keydown", function (e) {
+            if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); save.onclick(); }
+          });
+          setTimeout(function () { ta.focus(); ta.select(); }, 0);
+        } else {
+          var ub = document.createElement("div");
+          ub.className = "body";
+          ub.innerHTML = renderInline(item.text);
+          el.appendChild(ub);
+          var ua = document.createElement("div");
+          ua.className = "msg-actions";
+          if (item.turn === state.lastTurn && state.running) {
+            var ed = document.createElement("button");
+            ed.textContent = "✎ 编辑";
+            ed.onclick = function () { item.editing = true; scheduleRender(); };
+            ua.appendChild(ed);
+          }
+          var cp = document.createElement("button");
+          cp.textContent = "⧉ 复制";
+          cp.onclick = function () { post({ type: "copyText", text: item.text }); };
+          ua.appendChild(cp);
+          el.appendChild(ua);
+        }
         break;
       }
       case "assistant": {
@@ -332,6 +450,18 @@
         });
         if (item.blocks.length === 0 && item.streaming) html = "<div class='body'><span class='stream-cursor'></span></div>";
         el.innerHTML = html;
+        if (!item.streaming) {
+          var aa = document.createElement("div");
+          aa.className = "msg-actions";
+          var acp = document.createElement("button");
+          acp.textContent = "⧉ 复制";
+          acp.onclick = function () {
+            var all = item.blocks.filter(function (b) { return b.type === "text"; }).map(function (b) { return b.text; }).join("\n");
+            post({ type: "copyText", text: all });
+          };
+          aa.appendChild(acp);
+          el.appendChild(aa);
+        }
         break;
       }
       case "tool": {
@@ -350,6 +480,40 @@
     return el;
   }
 
+  /* ---------- pending-send queue rows (session/queue snapshot) ---------- */
+  function renderQueue() {
+    queueEl.innerHTML = "";
+    if (!state.queue.length) { queueEl.hidden = true; return; }
+    queueEl.hidden = false;
+    state.queue.forEach(function (it) {
+      var row = document.createElement("div");
+      row.className = "q-item";
+      var tag = document.createElement("span");
+      tag.className = "qtag";
+      tag.textContent = it.placement === "steering" ? "插入中" : it.placement === "context" ? "上下文" : "排队";
+      var txt = document.createElement("span");
+      txt.className = "qtext";
+      txt.textContent = it.text || "(图片)";
+      txt.title = it.text;
+      row.appendChild(tag);
+      row.appendChild(txt);
+      var qbtn = function (label, title, fn, danger) {
+        var b = document.createElement("button");
+        b.className = "qbtn" + (danger ? " danger" : "");
+        b.textContent = label;
+        b.title = title;
+        b.onclick = fn;
+        return b;
+      };
+      row.appendChild(qbtn("copy", "复制", function () { post({ type: "copyText", text: it.text }); }));
+      if (it.placement === "queued") {
+        row.appendChild(qbtn("steer", "在下一个 LLM 回复后插入（打断）", function () { post({ type: "queueSteer", itemId: it.id }); }));
+        row.appendChild(qbtn("del", "撤回（从队列移除）", function () { post({ type: "queueRemove", itemId: it.id }); }, true));
+      }
+      queueEl.appendChild(row);
+    });
+  }
+
   /* ---------- protocol from host ---------- */
   window.addEventListener("message", function (event) {
     var msg = event.data;
@@ -363,20 +527,52 @@
         if (state.activeSessionId && state.titles[state.activeSessionId] === undefined) {
           state.titles[state.activeSessionId] = undefined;
         }
+        var act = (msg.sessions || []).find(function (x) { return x.sessionId === msg.activeSessionId; });
+        state.usage = act && act.usage ? act.usage : null;
         // If the active session changed (or first state), reset the view to that session's cache
         if (msg.activeSessionId !== state.lastSessionId) {
           state.lastSessionId = msg.activeSessionId;
           state.items = []; state.seqs = new Set(); state.oldestSeq = Infinity;
           state.curAssistant = null; state.openBlocks = [];
+          state.queue = []; renderQueue();
+          suspended = false;
+          forceBottom = true;
         }
         updateHeader();
         scheduleRender();
+        break;
+      }
+      case "models": {
+        state.models = msg;
+        modelEl.innerHTML = "";
+        if (msg.groups && msg.groups.length) {
+          msg.groups.forEach(function (g) {
+            var og = document.createElement("optgroup");
+            og.label = g.name || g.id;
+            g.models.forEach(function (m) {
+              var o = document.createElement("option");
+              o.value = g.id + "|" + m.id;
+              o.textContent = m.name;
+              if (msg.current && msg.current.provider === g.id && msg.current.model === m.id) o.selected = true;
+              og.appendChild(o);
+            });
+            modelEl.appendChild(og);
+          });
+          modelEl.hidden = false;
+        } else {
+          modelEl.hidden = true;
+        }
         break;
       }
       case "history": {
         if (msg.sessionId !== state.activeSessionId) return;
         state.items = []; state.seqs = new Set(); state.oldestSeq = Infinity;
         state.curAssistant = null; state.openBlocks = [];
+        // NOTE: do NOT clear state.queue here — send() triggers a history
+        // reload right after a queue prompt, and wiping the queue here would
+        // race the session/queue frame and hide the pending rows.
+        suspended = false;
+        forceBottom = true;
         (msg.events || []).forEach(applyEvent);
         scheduleRender();
         break;
@@ -391,6 +587,12 @@
           state.running = msg.running;
           updateHeader();
         }
+        break;
+      }
+      case "queue": {
+        if (msg.sessionId !== state.activeSessionId) return;
+        state.queue = msg.items || [];
+        renderQueue();
         break;
       }
       case "error":
@@ -410,7 +612,7 @@
   /* ---------- @ mention: drill-down directory menu above the input ---------- */
   var mentionTimer = null;
   var menuEl = $("mention-menu");
-  var menuItems = [], menuIndex = 0, menuActive = false;
+  var menuItems = [], menuIndex = 0, menuActive = false, menuMode = "mention";
   var fileIndex = { files: [], dirs: [] };
   var currentDir = "";
 
@@ -482,7 +684,7 @@
   }
   function drawMenu() {
     menuEl.innerHTML = "";
-    menuEl.appendChild(drawBreadcrumbs());
+    if (menuMode === "mention") menuEl.appendChild(drawBreadcrumbs());
     menuItems.forEach(function (it, i) {
       var div = document.createElement("div");
       div.className = "m-item" + (it.kind === "hint" ? " hint" : "") + (i === menuIndex ? " sel" : "");
@@ -491,6 +693,19 @@
       } else if (it.kind === "up") {
         div.textContent = it.name;
         div.onclick = function () { currentDir = dirParent(currentDir); refreshMentionMenu(); };
+        div.onmouseenter = function () { if (menuIndex !== i) { menuIndex = i; drawMenu(); } };
+      } else if (it.kind === "slash") {
+        var k2 = document.createElement("span");
+        k2.className = "m-kind";
+        k2.textContent = "命令";
+        var n2 = document.createTextNode("·" + it.name + " ");
+        var d = document.createElement("span");
+        d.className = "m-path";
+        d.textContent = it.desc;
+        div.appendChild(k2);
+        div.appendChild(n2);
+        div.appendChild(d);
+        div.onclick = function () { insertSlash(it.name.slice(1)); };
         div.onmouseenter = function () { if (menuIndex !== i) { menuIndex = i; drawMenu(); } };
       } else {
         var kind = document.createElement("span");
@@ -517,18 +732,62 @@
   function hideMenu() { menuActive = false; menuEl.hidden = true; menuItems = []; }
   function refreshMentionMenu() {
     var m = mentionMatch(inputEl.value);
-    if (!m) { hideMenu(); return; }
-    if (fileIndex.files.length === 0 && fileIndex.dirs.length === 0) {
-      showMenu([{ kind: "hint", name: "文件索引加载中…", rel: null }]);
-      post({ type: "refreshFiles" });
+    if (m) {
+      menuMode = "mention";
+      if (fileIndex.files.length === 0 && fileIndex.dirs.length === 0) {
+        showMenu([{ kind: "hint", name: "文件索引加载中…", rel: null }]);
+        post({ type: "refreshFiles" });
+        return;
+      }
+      var items = menuRows(m.query);
+      showMenu(items.length ? items : [{ kind: "hint", name: "无匹配", rel: null }]);
       return;
     }
-    var items = menuRows(m.query);
-    showMenu(items.length ? items : [{ kind: "hint", name: "无匹配", rel: null }]);
+    var s = slashMatch(inputEl.value);
+    if (s) {
+      menuMode = "slash";
+      var rows = slashRows(s.query);
+      showMenu(rows.length ? rows : [{ kind: "hint", name: "无匹配", rel: null }]);
+      return;
+    }
+    hideMenu();
   }
   function maybeTriggerMention() {
     if (mentionTimer) clearTimeout(mentionTimer);
     mentionTimer = setTimeout(refreshMentionMenu, 120);
+  }
+
+  /* ---------- / command picker (mirrors the DSH slash trigger) ---------- */
+  var SLASH_COMMANDS = [
+    { name: "compact", desc: "压缩历史" },
+    { name: "goal", desc: "查看 / 设定长任务目标" },
+    { name: "plan", desc: "进入 / 退出计划模式" },
+    { name: "permission", desc: "切换权限预设（沙箱 + 审批）" },
+    { name: "feedback", desc: "反馈本次会话" }
+  ];
+  function slashMatch(value) {
+    // '/' at line start or after whitespace; a second '/' or an inline URL
+    // slash does NOT trigger (mirrors dsh-client-ui-input-trigger).
+    var m = /(?:^|\s)\/([^\s\/]*)$/.exec(value);
+    return m ? { query: m[1], start: m.index + m[0].indexOf("/") } : null;
+  }
+  function insertSlash(name) {
+    var m = slashMatch(inputEl.value);
+    var before = m ? inputEl.value.slice(0, m.start) : inputEl.value;
+    var after = m ? inputEl.value.slice(m.start + m.query.length + 1) : "";
+    inputEl.value = before + "/" + name + " " + after;
+    inputEl.focus();
+    autoGrow();
+    hideMenu();
+  }
+  function slashRows(q) {
+    var v = q.trim().toLowerCase();
+    var rows = [];
+    SLASH_COMMANDS.forEach(function (c) {
+      if (v && c.name.indexOf(v) < 0) return;
+      rows.push({ kind: "slash", name: "/" + c.name, desc: c.desc });
+    });
+    return rows.slice(0, 30);
   }
 
   function updateHeader() {
@@ -555,12 +814,68 @@
     });
     cancelBtn.hidden = !state.running;
     sendBtn.disabled = !state.connected;
-    statusEl.textContent = state.running
-      ? "agent 运行中…"
-      : (state.connected ? (s && s.title ? s.title : "") : "");
+    updateStatusLine();
+  }
+
+  /* ---------- metrics line under the input (mirrors the DSH web StatsLine) ---------- */
+  // Compact duration: 45.2s under a minute, 2m42s from there on.
+  function fmtDur(ms) {
+    var s = (ms || 0) / 1e3;
+    if (s < 60) return (Math.round(s * 10) / 10) + "s";
+    var whole = Math.round(s);
+    return Math.floor(whole / 60) + "m" + (whole % 60) + "s";
+  }
+  // Compact token count: 517 / 12.2K / 517K / 1.2M (one decimal under three digits).
+  function fmtTok(n) {
+    var scaled = function (v) { return v >= 100 ? String(Math.round(v)) : String(Math.round(v * 10) / 10); };
+    if (n < 1e3) return String(n);
+    if (n < 1e6) return scaled(n / 1e3) + "K";
+    return scaled(n / 1e6) + "M";
+  }
+  // Tokens/sec: whole tokens from ten up, one decimal below.
+  function fmtTps(tps) {
+    var c = Math.max(0, tps);
+    return c >= 10 ? String(Math.round(c)) : String(Math.round(c * 10) / 10);
+  }
+  function updateStatusLine() {
+    if (!state.connected) { statusEl.textContent = ""; return; }
+    var groups = [];
+    var act = state.sessions.find(function (x) { return x.sessionId === state.activeSessionId; });
+    var st = act && act.stats;
+    if (st && st.steps > 0) {
+      groups.push((st.turns || 0) + " 轮 · " + st.steps + " 步");
+      var durations = [];
+      if (st.llmMs > 0) durations.push("LLM " + fmtDur(st.llmMs));
+      if (st.toolMs > 0) durations.push("工具调用 " + fmtDur(st.toolMs));
+      if (durations.length > 0) groups.push(durations.join(" · "));
+      var speeds = [];
+      if (st.ttftSteps > 0) speeds.push("首 token 平均 " + fmtDur(st.ttftMs / st.ttftSteps));
+      if (st.decodeMs > 0) speeds.push(fmtTps(st.decodeTokens / (st.decodeMs / 1e3)) + " tok/s");
+      if (speeds.length > 0) groups.push(speeds.join(" · "));
+    }
+    var u = state.usage;
+    if (u) {
+      var billed = (u.uncachedInputTokens || 0) + (u.cacheReadTokens || 0) + (u.cacheWriteTokens || 0);
+      if (billed > 0 && typeof u.cacheReadTokens === "number") {
+        groups.push("缓存命中 " + Math.round((u.cacheReadTokens / billed) * 100) + "%");
+      }
+      groups.push("输入 " + fmtTok(billed) + " tok · 输出 " + fmtTok(u.outputTokens || 0) + " tok");
+    }
+    var line = groups.join(" | ");
+    if (state.running) {
+      var live = [];
+      if (state.firstTokenAt) {
+        live.push("首 token " + ((state.firstTokenAt - state.turnStart) / 1000).toFixed(1) + "s");
+        var elapsed = (performance.now() - state.firstTokenAt) / 1000;
+        if (elapsed > 0.3 && state.turnOutput > 0) live.push(fmtTps(state.turnOutput / elapsed) + " tok/s");
+      }
+      line = (live.length ? live.join(" · ") + " | " : "") + line;
+    }
+    statusEl.textContent = line;
   }
 
   /* ---------- input ---------- */
+  var history = [], historyIndex = -1, historyDraft = ""; // CLI-style ↑/↓ history
   function autoGrow() {
     inputEl.style.height = "auto";
     inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + "px";
@@ -584,10 +899,29 @@
         if (it.kind === "up") { currentDir = dirParent(currentDir); refreshMentionMenu(); }
         else if (it.kind === "dir") { currentDir = it.rel; refreshMentionMenu(); }
         else if (it.kind === "file") insertMention(it.rel, false);
+        else if (it.kind === "slash") insertSlash(it.name.slice(1));
         else hideMenu();
         return;
       }
       if (e.key === "Escape") { e.preventDefault(); hideMenu(); return; }
+    }
+    if (e.key === "ArrowUp" && history.length > 0) {
+      e.preventDefault();
+      if (historyIndex === -1) { historyDraft = inputEl.value; historyIndex = 0; }
+      else historyIndex = Math.min(historyIndex + 1, history.length - 1);
+      inputEl.value = history[history.length - 1 - historyIndex];
+      autoGrow();
+      inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      if (historyIndex === -1) return; // not navigating yet — keep default caret behavior
+      e.preventDefault();
+      historyIndex--;
+      inputEl.value = historyIndex === -1 ? historyDraft : history[history.length - 1 - historyIndex];
+      autoGrow();
+      inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+      return;
     }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
@@ -595,11 +929,83 @@
     }
   });
   sendBtn.addEventListener("click", send);
+  modelEl.addEventListener("change", function () {
+    var v = modelEl.value;
+    if (!v) return;
+    var i = v.indexOf("|");
+    post({ type: "selectModel", provider: v.slice(0, i), model: v.slice(i + 1) });
+  });
+
+  /* ---------- image attachments (Ctrl+V paste) ---------- */
+  var attachments = [];
+  function renderAttachments() {
+    attachEl.innerHTML = "";
+    if (!attachments.length) { attachEl.hidden = true; return; }
+    attachEl.hidden = false;
+    attachments.forEach(function (a, i) {
+      var chip = document.createElement("div");
+      chip.className = "attach-chip";
+      var img = document.createElement("img");
+      img.src = "data:" + a.mediaType + ";base64," + a.data;
+      var name = document.createElement("span");
+      name.className = "aname";
+      name.textContent = a.name || (a.mediaType.replace("image/", "") + " 图片");
+      var x = document.createElement("span");
+      x.className = "ax";
+      x.textContent = "×";
+      x.onclick = function (idx) { return function () { attachments.splice(idx, 1); renderAttachments(); }; }(i);
+      chip.appendChild(img); chip.appendChild(name); chip.appendChild(x);
+      attachEl.appendChild(chip);
+    });
+  }
+  inputEl.addEventListener("paste", function (e) {
+    var items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    var got = false;
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (it.kind === "file" && it.type && /^image\/(png|jpeg|webp|gif)$/.test(it.type)) {
+        var file = it.getAsFile();
+        if (!file) continue;
+        got = true;
+        var reader = new FileReader();
+        reader.onload = (function (f, mt) { return function () {
+          var result = String(reader.result || "");
+          var comma = result.indexOf(",");
+          if (comma < 0) return;
+          attachments.push({ mediaType: mt, data: result.slice(comma + 1), name: f.name || "" });
+          renderAttachments();
+        }; })(file, it.type);
+        reader.readAsDataURL(file);
+      }
+    }
+    if (got) e.preventDefault();
+  });
+
   function send() {
     var text = inputEl.value.trim();
-    if (!text) return;
+    if (!text && attachments.length === 0) return;
+    // While the agent is running, Enter queues the message (harness queue);
+    // cap the pending queue at 4.
+    if (text && state.running) {
+      var queued = state.queue.filter(function (it) { return it.placement === "queued"; }).length;
+      if (queued >= 4) {
+        statusEl.textContent = "队列已满（最多 4 条）";
+        return;
+      }
+    }
     hideMenu();
-    post({ type: "send", text: text });
+    if (text) {
+      state.items.push({ kind: "user", text: text, pending: true, turn: state.lastTurn });
+      scheduleRender();
+    }
+    post({ type: "send", text: text, attachments: attachments.slice(), mode: "queue" });
+    history.push(text || ("📷 " + attachments.length + " 张图片"));
+    if (history.length > 200) history.shift();
+    historyIndex = -1;
+    historyDraft = "";
+    attachments = [];
+    renderAttachments();
     inputEl.value = "";
     autoGrow();
   }

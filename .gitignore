@@ -9,3 +9,6 @@ dist/
 
 # Dev/test artifacts
 scripts/*.log
+
+# One-off debug/scratch scripts (never commit)
+scratch/

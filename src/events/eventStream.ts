@@ -68,6 +68,7 @@ export class HarnessEventStream implements vscode.Disposable {
       sessionId?: unknown;
       event?: SessionEvent;
       error?: unknown;
+      items?: unknown;
     } | null;
     if (!inner || typeof inner !== "object") return;
     if (inner.type === "stream/error") {
@@ -79,6 +80,18 @@ export class HarnessEventStream implements vscode.Disposable {
       const event = inner.event;
       if (sessionId && event && typeof event.type === "string") {
         this.onSessionEvent(sessionId, event as SessionEvent);
+      }
+      return;
+    }
+    // Direct mux frames (session/queue, session/jobs, session/subscribed,
+    // approval/*, question/*, ...) arrive as their own type with sessionId and
+    // data fields at the top level — surface them as session events carrying
+    // the frame payload, so consumers see the whole session control plane.
+    if (typeof inner.type === "string" && inner.sessionId !== undefined) {
+      const sessionId = String(inner.sessionId);
+      if (sessionId) {
+        const { sessionId: _sid, type, ...rest } = inner;
+        this.onSessionEvent(sessionId, { type, data: rest as Record<string, unknown> });
       }
     }
   }

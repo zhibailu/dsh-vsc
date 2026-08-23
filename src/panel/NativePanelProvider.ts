@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { HarnessClient } from "../harness/client";
+import type { PromptContentPart, QueueAction } from "../harness/protocol";
 import type { HostMessage, PanelEvent, PanelSession, WebviewMessage } from "./protocol";
 
 /**
@@ -41,9 +42,25 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     // Route mux events into this panel (filtered by active session host-side).
     this.onSessionEvent((sessionId, event) => {
       this.trackRunning(sessionId, event);
-      if (sessionId === this.activeSessionId) {
-        this.post({ type: "event", sessionId, event });
+      if (sessionId !== this.activeSessionId) return;
+      if (event.type === "session/queue") {
+        // Queue state snapshot — render the pending-send rows above the input.
+        const data = (event.data ?? {}) as { items?: { id?: unknown; placement?: unknown; message?: { content?: { type?: string; text?: string }[] } }[] };
+        this.post({
+          type: "queue",
+          sessionId,
+          items: (data.items ?? []).map((it) => ({
+            id: String(it.id ?? ""),
+            placement: String(it.placement ?? "queued"),
+            text: (it.message?.content ?? [])
+              .filter((b) => b.type === "text" && typeof b.text === "string")
+              .map((b) => b.text as string)
+              .join(""),
+          })),
+        });
+        return;
       }
+      this.post({ type: "event", sessionId, event });
     });
     // Keep the @ file index fresh.
     this.context.subscriptions.push(
@@ -68,7 +85,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     }
     try {
       const { items } = await this.client.listSessions();
-      this.sessions = items
+      let sessions = items
         .filter((item) => !item.blank)
         .map((item) => ({
           sessionId: item.sessionId,
@@ -76,14 +93,31 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           blank: item.blank,
           updatedAt: item.updatedAt,
           title: item.projections?.values?.title ?? undefined,
+          usage: item.projections?.values?.tokenUsage ?? undefined,
+          stats: item.projections?.values?.sessionStats ?? undefined,
         }))
         .sort((a, b) => b.updatedAt - a.updatedAt);
+      // A freshly created session is blank until its first prompt; keep it
+      // visible as the active session instead of silently reverting.
+      if (this.activeSessionId && !sessions.some((s) => s.sessionId === this.activeSessionId)) {
+        sessions.unshift({
+          sessionId: this.activeSessionId,
+          running: false,
+          blank: true,
+          updatedAt: Date.now(),
+          title: "新会话",
+          usage: undefined,
+          stats: undefined,
+        });
+      }
+      this.sessions = sessions;
       if (this.sessions.length > 0 && !this.sessions.some((s) => s.sessionId === this.activeSessionId)) {
         this.activeSessionId = this.sessions[0].sessionId;
       }
       this.postState();
       if (this.activeSessionId) {
         await this.loadHistory(this.activeSessionId, undefined);
+        await this.postModels();
       }
     } catch (error) {
       this.post({ type: "error", message: `会话列表失败: ${(error as Error).message}` });
@@ -106,8 +140,22 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       case "selectSession":
         this.activeSessionId = message.sessionId;
         await this.loadHistory(message.sessionId, undefined);
+        await this.postModels();
         this.postState();
         break;
+      case "getModels":
+        await this.postModels();
+        break;
+      case "selectModel": {
+        if (!this.activeSessionId) break;
+        try {
+          await this.client.selectModel(this.activeSessionId, message.provider, message.model);
+          await this.postModels();
+        } catch (error) {
+          this.post({ type: "error", message: `切换模型失败: ${(error as Error).message}` });
+        }
+        break;
+      }
       case "newSession": {
         try {
           const { sessionId } = await this.client.createSession();
@@ -118,9 +166,32 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         }
         break;
       }
+      case "copyText":
+        void vscode.env.clipboard.writeText(message.text).then(
+          () => undefined,
+          (error) => this.post({ type: "error", message: `复制失败: ${(error as Error).message}` })
+        );
+        break;
+      case "queueSteer":
+      case "queueRemove": {
+        if (!this.activeSessionId) break;
+        const action: QueueAction = message.type === "queueSteer" ? { kind: "steer" } : { kind: "remove" };
+        try {
+          await this.client.updateQueue(this.activeSessionId, message.itemId, action);
+        } catch (error) {
+          this.post({ type: "error", message: `队列操作失败: ${(error as Error).message}` });
+        }
+        break;
+      }
       case "send": {
         const text = message.text.trim();
-        if (!text) return;
+        const content: PromptContentPart[] = [];
+        for (const a of message.attachments ?? []) {
+          content.push({ type: "image", mediaType: a.mediaType, data: a.data, name: a.name });
+        }
+        if (text) content.push({ type: "text", text });
+        if (content.length === 0) return;
+        const mode = message.mode ?? "queue";
         let sessionId = this.activeSessionId;
         if (!sessionId) {
           try {
@@ -133,7 +204,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           }
         }
         try {
-          await this.client.prompt(sessionId, [{ type: "text", text }], "queue");
+          await this.client.prompt(sessionId, content, mode);
           this.post({ type: "running", sessionId, running: true });
           await this.refresh();
         } catch (error) {
@@ -222,6 +293,25 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         this.titles.set(sessionId, title);
         if (sessionId === this.activeSessionId) this.postState();
       }
+    }
+  }
+
+  private async postModels(): Promise<void> {
+    if (!this.client || !this.activeSessionId) return;
+    try {
+      const catalog = await this.client.models(this.activeSessionId);
+      this.post({
+        type: "models",
+        current: catalog.current,
+        groups: catalog.groups.map((g) => ({
+          id: g.id,
+          name: g.name,
+          models: g.models.map((m) => ({ id: m.id, name: m.name })),
+        })),
+      });
+    } catch (error) {
+      // Model catalog is advisory; fail silently rather than spamming errors.
+      this.log(`models: ${(error as Error).message}`);
     }
   }
 

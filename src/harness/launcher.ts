@@ -1,7 +1,10 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import * as vscode from "vscode";
 
 let child: ChildProcess | undefined;
+let launcher: { node: string; script: string } | null = null;
 
 /** Whether our spawned harness child is still alive. */
 export function isRunning(): boolean {
@@ -33,26 +36,114 @@ function readWindowsUserEnv(name: string): Promise<string | undefined> {
   });
 }
 
+function runWhereAll(name: string): Promise<string[]> {
+  return new Promise((resolve) => {
+    execFile("where.exe", [name], { windowsHide: true }, (error, stdout) => {
+      if (error) return resolve([]);
+      resolve(
+        stdout
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0)
+      );
+    });
+  });
+}
+
+async function resolveNodePath(): Promise<string | undefined> {
+  const hits = await runWhereAll("node");
+  const exe = hits.find((h) => h.toLowerCase().endsWith(".exe"));
+  if (exe) return exe;
+  for (const candidate of ["C:\\Program Files\\nodejs\\node.exe", "C:\\Program Files (x86)\\nodejs\\node.exe"]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
 /**
- * Start `dsh web` as a DETACHED hidden background process (no terminal window).
+ * Resolve the real dsh entry script. We must NOT launch through `dsh`/`npx`
+ * shims: npm .cmd shims chain `cmd.exe → dsh.cmd → cmd.exe`, and the inner cmd
+ * opens its own visible console even when the outer spawn used windowsHide.
+ * Spawning `node lib/bin.js` directly with windowsHide (CREATE_NO_WINDOW)
+ * keeps the whole harness tree windowless (the MCP SDK already hides its own
+ * server children).
+ */
+async function resolveDshScript(): Promise<string | undefined> {
+  // Prefer the .cmd shim (e.g. %APPDATA%\npm\dsh.cmd); `where` may list a
+  // bare extensionless `dsh` first, which is not executable by CreateProcess.
+  const hits = await runWhereAll("dsh");
+  const shim = hits.find((h) => h.toLowerCase().endsWith(".cmd"));
+  if (shim) {
+    try {
+      const content = readFileSync(shim, "utf8");
+      // The shim references the script as e.g. "%dp0%\node_modules\@deepseek-ai\dsh\lib\bin.js"
+      const m = /((?:node_modules\\)?@deepseek-ai\\dsh\\lib\\bin\.js)/.exec(content);
+      if (m) {
+        let rel = m[1].replace(/\//g, "\\");
+        if (!rel.startsWith("node_modules")) rel = "node_modules\\" + rel;
+        const candidate = join(shim.replace(/[^\\/]+$/, ""), rel);
+        if (existsSync(candidate)) return candidate;
+      }
+    } catch {
+      /* fall through to npm prefix */
+    }
+  }
+  // Fallback: derive from the global npm prefix. execFile CANNOT launch a .cmd
+  // directly (CreateProcess EINVAL), so go through cmd.exe /c.
+  const comspec = process.env.ComSpec || "cmd.exe";
+  const prefix = await new Promise<string | undefined>((resolve) => {
+    execFile(comspec, ["/c", "npm", "prefix", "-g"], { windowsHide: true }, (error, stdout) => {
+      resolve(error ? undefined : stdout.trim() || undefined);
+    });
+  });
+  if (prefix) {
+    const candidate = join(prefix, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+async function resolveLauncher(): Promise<{ node: string; script: string } | null> {
+  if (launcher) return launcher;
+  try {
+    const node = await resolveNodePath();
+    const script = await resolveDshScript();
+    if (!node || !script) return null;
+    launcher = { node, script };
+    return launcher;
+  } catch (error) {
+    // Never let a resolution failure hang or crash the watch loop.
+    return null;
+  }
+}
+
+/**
+ * Start `dsh web` as a DETACHED, WINDOWLESS background process (no console,
+ * no cmd shim). Direct `node bin.js` spawn with windowsHide = CREATE_NO_WINDOW:
  * - detached + stdio:'ignore' + unref: survives VS Code closing, so the harness
  *   stays a shared service (the browser GUI keeps working).
- * - windowsHide: no console window appears.
+ * - no console anywhere in the tree, so there is nothing to close and nothing
+ *   to kill by accident.
  * - GITHUB_TOKEN resolved (process env, then Windows user env).
  * Stop it with the `dsh.stop` command (taskkill /T kills the whole tree).
  */
 export async function startHarness(port: number, log: vscode.OutputChannel): Promise<void> {
   if (isRunning()) return;
   const env = await resolveSpawnEnv();
-  const cmd = `dsh web --no-open --port ${port}`;
-  log.appendLine(`$ ${cmd} (detached, hidden)`);
+  const l = await resolveLauncher();
+  if (!l) {
+    log.appendLine("cannot resolve node/dsh for the silent launch — PATH missing `node` or the `dsh` shim; run `dsh web` manually for now");
+    return;
+  }
+  const args = ["web", "--no-open", "--port", String(port)];
+  log.appendLine(`$ ${l.node} ${l.script} ${args.join(" ")} (direct node, windowless, detached)`);
   log.appendLine(
     env.GITHUB_TOKEN
       ? `GITHUB_TOKEN: ${env.GITHUB_TOKEN.length} chars (${process.env.GITHUB_TOKEN ? "process env" : "Windows user env fallback"})`
       : "GITHUB_TOKEN: MISSING — dsh web will fail to boot (mcp-github config)"
   );
-  child = spawn(cmd, {
-    shell: true,
+  child = spawn(l.node, [l.script, ...args], {
+    shell: false,
     windowsHide: true,
     detached: true,
     stdio: "ignore",
