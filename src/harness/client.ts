@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { METHODS, type ClientRequest, type ServerResponse, type RpcError, type HostDescription, type PromptContentPart, type SessionSummary } from "./protocol";
+import { METHODS, type ClientRequest, type ServerResponse, type RpcError, type HostDescription, type ModelCatalog, type PromptContentPart, type QueueAction, type SessionSummary } from "./protocol";
 
 /** A business-level RPC failure (result.ok === false). */
 export class RpcErrorResult extends Error {
@@ -73,6 +73,39 @@ export class HarnessClient {
 
   cancel(sessionId: string): Promise<{ accepted: true }> {
     return this.call<{ accepted: true }>(METHODS.sessionCancel, { sessionId });
+  }
+
+  models(sessionId: string): Promise<ModelCatalog> {
+    return this.call<ModelCatalog>(METHODS.sessionModels, { sessionId });
+  }
+
+  selectModel(sessionId: string, provider: string, model: string): Promise<{ selected: { provider: string; model: string } }> {
+    return this.call<{ selected: { provider: string; model: string } }>(METHODS.sessionSelectModel, { sessionId, provider, model });
+  }
+
+  updateQueue(sessionId: string, itemId: string, action: QueueAction): Promise<{ accepted: true }> {
+    return this.call<{ accepted: true }>(METHODS.sessionUpdateQueue, { sessionId, itemId, action });
+  }
+
+  /** Slash-command catalog for a session (wire: commands/list, endpoint form). */
+  commandList(
+    sessionId: string
+  ): Promise<{ name: string; description?: string; input?: { hint?: string; images?: boolean } }[]> {
+    return this.call<{ name: string; description?: string; input?: { hint?: string; images?: boolean } }[]>(
+      METHODS.commandsList,
+      { args: { agentId: sessionId } }
+    );
+  }
+
+  /** Execute one slash-command line against a session. */
+  commandExecute(
+    sessionId: string,
+    line: string
+  ): Promise<{ commandId?: string; result?: { kind: string; text?: string } } | undefined> {
+    return this.call<{ commandId?: string; result?: { kind: string; text?: string } } | undefined>(
+      METHODS.commandsExecute,
+      { args: { agentId: sessionId, line, images: [] } }
+    );
   }
 
   /** Cheap liveness probe: host.describe within a timeout. */

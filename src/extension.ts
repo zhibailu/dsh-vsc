@@ -4,7 +4,7 @@ import { renderEmbedHtml } from "./panel/embed";
 import { DshStatusBar } from "./status";
 import { HarnessClient } from "./harness/client";
 import { configuredBase, discover, portOf } from "./harness/discover";
-import { startHarness, stopHarness } from "./harness/launcher";
+import { startHarness, stopHarness, isRunning as harnessRunning } from "./harness/launcher";
 import { HarnessEventStream } from "./events/eventStream";
 import { ChangeTracker } from "./editor/changeTracker";
 import { askSelection } from "./editor/askSelection";
@@ -14,6 +14,9 @@ import type { PanelEvent } from "./panel/protocol";
 const POLL_MS = 1000;
 const START_TIMEOUT_MS = 30000;
 const RIGHT_VIEW = "dsh.sidebar.right";
+const MAX_SPAWN_FAILURES = 3; // consecutive auto-spawn failures before giving up this session
+const OFFLINE_RECHECK_MS = 15000; // slow poll while down-but-not-our-job (user may start one manually)
+const DISCONNECT_RECHECK_MS = 3000; // grace before probing after the event stream drops
 
 export function activate(context: vscode.ExtensionContext): void {
   const log = vscode.window.createOutputChannel("DSH Bridge");
@@ -26,7 +29,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const panelListeners = new Set<(sessionId: string, event: PanelEvent) => void>();
   let client: HarnessClient | null = null;
   let stream: HarnessEventStream | null = null;
-  let autoStarted = false;
+  // Lifecycle state. `autoStarted` is gone: the watch loop owns auto-start.
+  let connecting = false; // a spawn+wait is in flight; prevents double work
+  let userStopped = false; // `dsh.stop` asked us not to respawn; cleared by start / reload
+  let autoRetryDisabled = false; // too many consecutive spawn failures this session
+  let consecutiveSpawnFailures = 0;
+  let checkTimer: NodeJS.Timeout | null = null;
 
   const panel = new NativePanelProvider(context, makeLog, () => client, (cb) => panelListeners.add(cb));
 
@@ -47,12 +55,23 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.commands.executeCommand(`${RIGHT_VIEW}.focus`);
     }),
     vscode.commands.registerCommand("dsh.start", () => {
+      // Explicit start: clear every "don't respawn" latch and retry for real.
+      userStopped = false;
+      autoRetryDisabled = false;
+      consecutiveSpawnFailures = 0;
       void ensureRunning();
     }),
     vscode.commands.registerCommand("dsh.stop", () => {
-      stopHarness();
-      status.setOffline();
-      log.appendLine("dsh web stopped (auto-started instance)");
+      if (harnessRunning()) {
+        stopHarness();
+        userStopped = true;
+        status.setOffline();
+        log.appendLine("dsh web stopped (auto-started instance); not respawning until dsh:start or window reload");
+      } else {
+        void vscode.window.showInformationMessage(
+          "DSH Bridge：当前服务不是本扩展启动的（可能是你手动运行的 dsh web）。扩展无权停止它；要彻底停掉请关掉对应的终端。"
+        );
+      }
     }),
     vscode.commands.registerCommand("dsh.refreshStatus", () => {
       void refresh();
@@ -74,13 +93,70 @@ export function activate(context: vscode.ExtensionContext): void {
     }, 4000);
   }
 
-  async function ensureRunning(): Promise<void> {
-    const base = configuredBase();
-    const port = portOf(base);
-    status.setStarting(port);
-    await startHarness(port, log);
-    await waitUntilAlive(base, START_TIMEOUT_MS);
-    await refresh();
+  async function ensureRunning(): Promise<boolean> {
+    if (connecting) return false;
+    // Idempotent start: if something already answers, just (re)connect.
+    const before = await discover();
+    if (before.alive) {
+      await refresh();
+      return true;
+    }
+    connecting = true;
+    try {
+      const base = configuredBase();
+      const port = portOf(base);
+      status.setStarting(port);
+      panel.setPhase("starting");
+      await startHarness(port, log);
+      await waitUntilAlive(base, START_TIMEOUT_MS);
+    } finally {
+      connecting = false;
+    }
+    const d = await discover();
+    if (d.alive) {
+      consecutiveSpawnFailures = 0;
+      await refresh(); // connects, updates the panel, opens the stream
+      return true;
+    }
+    consecutiveSpawnFailures++;
+    if (consecutiveSpawnFailures >= MAX_SPAWN_FAILURES) {
+      autoRetryDisabled = true;
+      status.setOffline();
+      log.appendLine(
+        `DSH 服务连续 ${MAX_SPAWN_FAILURES} 次启动失败，本次会话不再自动重试（可执行命令 dsh: Start Web Harness 手动重试）`
+      );
+    } else {
+      scheduleHarnessCheck(Math.min(2000 * 2 ** (consecutiveSpawnFailures - 1), 30000));
+    }
+    return false;
+  }
+
+  /** Debounced harness probe: reconnect if it came back, respawn if it died. */
+  function scheduleHarnessCheck(delayMs: number): void {
+    if (checkTimer) clearTimeout(checkTimer);
+    checkTimer = setTimeout(() => {
+      checkTimer = null;
+      void checkHarness();
+    }, delayMs);
+  }
+
+  async function checkHarness(): Promise<void> {
+    if (connecting) return;
+    const d = await discover();
+    if (d.alive) {
+      await refresh();
+      return;
+    }
+    status.setOffline();
+    log.appendLine(`no harness at ${d.base}`);
+    const autoStart = vscode.workspace.getConfiguration("dshVsc").get<boolean>("autoStart", true);
+    if (autoStart && !userStopped && !autoRetryDisabled) {
+      void ensureRunning();
+    } else {
+      // Not our job to respawn right now — keep watching in case the user
+      // starts one manually (then the panel recovers on its own).
+      scheduleHarnessCheck(OFFLINE_RECHECK_MS);
+    }
   }
 
   async function refresh(): Promise<void> {
@@ -95,14 +171,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     client = null;
     panel.setClient(null);
-    log.appendLine(`no harness at ${d.base}`);
-    const autoStart = vscode.workspace.getConfiguration("dshVsc").get<boolean>("autoStart", true);
-    if (autoStart && !autoStarted) {
-      autoStarted = true;
-      await ensureRunning();
-    } else {
-      status.setOffline();
-    }
+    await checkHarness();
   }
 
   function ensureStream(base: string): void {
@@ -113,6 +182,19 @@ export function activate(context: vscode.ExtensionContext): void {
       panelListeners.forEach((cb) => cb(sessionId, event as PanelEvent));
     };
     stream.onError = (message) => log.appendLine(`event stream: ${message}`);
+    stream.onOpen = () => {
+      // Reconnected (possibly to a fresh harness we respawned): flip status online.
+      void discover().then((d) => {
+        if (d.alive) status.setOnline(d.version ?? "?");
+      });
+    };
+    stream.onDisconnect = () => {
+      // Stream dropped. The stream itself keeps retrying; give it a grace
+      // period, then check whether the harness is actually gone and respawn.
+      // Only bother while we were connected: once refresh() found the harness
+      // down (client === null) the slow OFFLINE_RECHECK poll owns recovery.
+      if (client) scheduleHarnessCheck(DISCONNECT_RECHECK_MS);
+    };
     stream.start();
     context.subscriptions.push({
       dispose: () => {

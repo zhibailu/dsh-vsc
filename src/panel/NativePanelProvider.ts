@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { HarnessClient } from "../harness/client";
+import type { PromptContentPart, QueueAction } from "../harness/protocol";
 import type { HostMessage, PanelEvent, PanelSession, WebviewMessage } from "./protocol";
 
 /**
@@ -19,6 +21,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
   private titles = new Map<string, string>();
   private connected = false;
   private version?: string;
+  private phase: "searching" | "starting" | "online" | "offline" = "searching";
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -40,10 +43,32 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     // Route mux events into this panel (filtered by active session host-side).
     this.onSessionEvent((sessionId, event) => {
       this.trackRunning(sessionId, event);
-      if (sessionId === this.activeSessionId) {
-        this.post({ type: "event", sessionId, event });
+      if (sessionId !== this.activeSessionId) return;
+      if (event.type === "session/queue") {
+        // Queue state snapshot — render the pending-send rows above the input.
+        const data = (event.data ?? {}) as { items?: { id?: unknown; placement?: unknown; message?: { content?: { type?: string; text?: string }[] } }[] };
+        this.post({
+          type: "queue",
+          sessionId,
+          items: (data.items ?? []).map((it) => ({
+            id: String(it.id ?? ""),
+            placement: String(it.placement ?? "queued"),
+            text: (it.message?.content ?? [])
+              .filter((b) => b.type === "text" && typeof b.text === "string")
+              .map((b) => b.text as string)
+              .join(""),
+          })),
+        });
+        return;
       }
+      this.post({ type: "event", sessionId, event });
     });
+    // Keep the @ file index fresh.
+    this.context.subscriptions.push(
+      vscode.workspace.onDidChangeWorkspaceFolders(() => void this.buildFileIndex()),
+      vscode.workspace.onDidCreateFiles(() => void this.buildFileIndex()),
+      vscode.workspace.onDidDeleteFiles(() => void this.buildFileIndex())
+    );
   }
 
   /** Called by extension.ts when harness connectivity changes. */
@@ -51,7 +76,14 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     this.client = client;
     this.connected = client !== null;
     this.version = version;
+    this.phase = client ? "online" : "offline";
     void this.refresh();
+  }
+
+  /** Loading-phase hint from the extension (searching / starting). */
+  setPhase(phase: "searching" | "starting" | "online" | "offline"): void {
+    this.phase = phase;
+    this.postState();
   }
 
   async refresh(): Promise<void> {
@@ -61,24 +93,55 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     }
     try {
       const { items } = await this.client.listSessions();
-      this.sessions = items
+      let sessions = items
         .filter((item) => !item.blank)
         .map((item) => ({
           sessionId: item.sessionId,
           running: item.running,
           blank: item.blank,
           updatedAt: item.updatedAt,
+          title: item.projections?.values?.title ?? undefined,
+          usage: item.projections?.values?.tokenUsage ?? undefined,
+          stats: item.projections?.values?.sessionStats ?? undefined,
+          context: item.projections?.values?.contextPressure ?? undefined,
         }))
         .sort((a, b) => b.updatedAt - a.updatedAt);
+      // A freshly created session is blank until its first prompt; keep it
+      // visible as the active session instead of silently reverting.
+      if (this.activeSessionId && !sessions.some((s) => s.sessionId === this.activeSessionId)) {
+        sessions.unshift({
+          sessionId: this.activeSessionId,
+          running: false,
+          blank: true,
+          updatedAt: Date.now(),
+          title: "新会话",
+          usage: undefined,
+          stats: undefined,
+          context: undefined,
+        });
+      }
+      this.sessions = sessions;
       if (this.sessions.length > 0 && !this.sessions.some((s) => s.sessionId === this.activeSessionId)) {
         this.activeSessionId = this.sessions[0].sessionId;
       }
       this.postState();
       if (this.activeSessionId) {
         await this.loadHistory(this.activeSessionId, undefined);
+        await this.postModels();
+        await this.postCommands();
       }
     } catch (error) {
       this.post({ type: "error", message: `会话列表失败: ${(error as Error).message}` });
+    }
+  }
+
+  private async postCommands(): Promise<void> {
+    if (!this.client || !this.activeSessionId) return;
+    try {
+      const items = await this.client.commandList(this.activeSessionId);
+      this.post({ type: "commands", items });
+    } catch (error) {
+      this.log(`commands: ${(error as Error).message}`);
     }
   }
 
@@ -93,12 +156,28 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         if (this.activeSessionId) {
           await this.loadHistory(this.activeSessionId, undefined);
         }
+        await this.buildFileIndex();
         break;
       case "selectSession":
         this.activeSessionId = message.sessionId;
         await this.loadHistory(message.sessionId, undefined);
+        await this.postModels();
+        await this.postCommands();
         this.postState();
         break;
+      case "getModels":
+        await this.postModels();
+        break;
+      case "selectModel": {
+        if (!this.activeSessionId) break;
+        try {
+          await this.client.selectModel(this.activeSessionId, message.provider, message.model);
+          await this.postModels();
+        } catch (error) {
+          this.post({ type: "error", message: `切换模型失败: ${(error as Error).message}` });
+        }
+        break;
+      }
       case "newSession": {
         try {
           const { sessionId } = await this.client.createSession();
@@ -109,9 +188,32 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         }
         break;
       }
+      case "copyText":
+        void vscode.env.clipboard.writeText(message.text).then(
+          () => undefined,
+          (error) => this.post({ type: "error", message: `复制失败: ${(error as Error).message}` })
+        );
+        break;
+      case "queueSteer":
+      case "queueRemove": {
+        if (!this.activeSessionId) break;
+        const action: QueueAction = message.type === "queueSteer" ? { kind: "steer" } : { kind: "remove" };
+        try {
+          await this.client.updateQueue(this.activeSessionId, message.itemId, action);
+        } catch (error) {
+          this.post({ type: "error", message: `队列操作失败: ${(error as Error).message}` });
+        }
+        break;
+      }
       case "send": {
         const text = message.text.trim();
-        if (!text) return;
+        const content: PromptContentPart[] = [];
+        for (const a of message.attachments ?? []) {
+          content.push({ type: "image", mediaType: a.mediaType, data: a.data, name: a.name });
+        }
+        if (text) content.push({ type: "text", text });
+        if (content.length === 0) return;
+        const mode = message.mode ?? "queue";
         let sessionId = this.activeSessionId;
         if (!sessionId) {
           try {
@@ -123,8 +225,24 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
             return;
           }
         }
+        // A leading-slash line is a real slash command — dispatch it through the
+        // commands domain instead of sending it to the agent as plain text.
+        if (mode === "queue" && text && text.startsWith("/") && content.length === 1) {
+          try {
+            const outcome = await this.client.commandExecute(sessionId, text);
+            this.post({
+              type: "cmdResult",
+              text: outcome?.result?.text ?? `命令已执行：${text}`,
+              ok: outcome?.result?.kind !== "error",
+            });
+            await this.refresh();
+          } catch (error) {
+            this.post({ type: "error", message: `命令执行失败: ${(error as Error).message}` });
+          }
+          return;
+        }
         try {
-          await this.client.prompt(sessionId, [{ type: "text", text }], "queue");
+          await this.client.prompt(sessionId, content, mode);
           this.post({ type: "running", sessionId, running: true });
           await this.refresh();
         } catch (error) {
@@ -148,7 +266,46 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       case "refresh":
         await this.refresh();
         break;
+      case "refreshFiles":
+        await this.buildFileIndex();
+        break;
     }
+  }
+
+  /**
+   * Build a workspace file index (files + all ancestor dirs) once and push it
+   * to the panel for LOCAL, millisecond @ filtering. Folders sort before files.
+   */
+  private async buildFileIndex(): Promise<void> {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) {
+      this.post({ type: "index", files: [], dirs: [] });
+      return;
+    }
+    const root = folders[0].uri.fsPath;
+    let uris: vscode.Uri[] = [];
+    try {
+      uris = await vscode.workspace.findFiles(
+        "**/*",
+        "**/{node_modules,dist,.git,out,build,coverage,.vscode-test,.vscode-test-ext}/**",
+        500
+      );
+      uris = uris.filter((uri) => !/\.vsix$/i.test(uri.fsPath));
+    } catch {
+      /* empty list */
+    }
+    const files = uris
+      .map((uri) => path.relative(root, uri.fsPath).replaceAll("\\", "/"))
+      .sort((a, b) => a.localeCompare(b));
+    const dirSet = new Set<string>();
+    for (const file of files) {
+      const parts = file.split("/");
+      for (let i = 1; i < parts.length; i++) {
+        dirSet.add(parts.slice(0, i).join("/"));
+      }
+    }
+    const dirs = [...dirSet].sort((a, b) => a.localeCompare(b));
+    this.post({ type: "index", files, dirs });
   }
 
   /** Load a history page ending before `beforeSeq` (tail when undefined). */
@@ -177,12 +334,33 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private async postModels(): Promise<void> {
+    if (!this.client || !this.activeSessionId) return;
+    try {
+      const catalog = await this.client.models(this.activeSessionId);
+      this.post({
+        type: "models",
+        current: catalog.current,
+        groups: catalog.groups.map((g) => ({
+          id: g.id,
+          name: g.name,
+          models: g.models.map((m) => ({ id: m.id, name: m.name })),
+        })),
+      });
+    } catch (error) {
+      // Model catalog is advisory; fail silently rather than spamming errors.
+      this.log(`models: ${(error as Error).message}`);
+    }
+  }
+
   private postState(): void {
     this.post({
       type: "state",
       connected: this.connected,
       version: this.version,
-      sessions: this.sessions.map((s) => ({ ...s, title: this.titles.get(s.sessionId) })),
+      phase: this.phase,
+      // live title event wins; otherwise the projection title from session.list
+      sessions: this.sessions.map((s) => ({ ...s, title: this.titles.get(s.sessionId) ?? s.title })),
       activeSessionId: this.activeSessionId,
     });
   }
@@ -197,6 +375,15 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
 
   private renderHtml(): string {
     const panelPath = vscode.Uri.joinPath(this.context.extensionUri, "dist", "media", "native", "panel.html");
-    return fs.readFileSync(panelPath.fsPath, "utf8");
+    let html = fs.readFileSync(panelPath.fsPath, "utf8");
+    try {
+      const whaleUri = this.view?.webview.asWebviewUri(
+        vscode.Uri.joinPath(this.context.extensionUri, "dist", "media", "dsh-whale.svg")
+      );
+      html = html.replaceAll("__WHALE_URI__", whaleUri?.toString() ?? "");
+    } catch {
+      /* keep the placeholder; the loading view degrades to text */
+    }
+    return html;
   }
 }

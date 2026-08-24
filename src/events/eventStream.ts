@@ -21,6 +21,10 @@ export class HarnessEventStream implements vscode.Disposable {
 
   onSessionEvent: (sessionId: string, event: SessionEvent) => void = () => {};
   onError: (message: string) => void = () => {};
+  /** Fired when a (re)connection succeeds — status bar can flip back online. */
+  onOpen: () => void = () => {};
+  /** Fired when the connection drops — the harness may be down; host decides. */
+  onDisconnect: () => void = () => {};
 
   start(): void {
     this.connect();
@@ -34,14 +38,20 @@ export class HarnessEventStream implements vscode.Disposable {
       this.ws = ws;
       ws.onopen = () => {
         this.retries = 0;
+        this.onOpen();
       };
       ws.onmessage = (msg) => this.handleFrame(msg.data);
-      ws.onclose = () => this.scheduleReconnect();
+      ws.onclose = () => {
+        if (this.disposed) return;
+        this.onDisconnect();
+        this.scheduleReconnect();
+      };
       ws.onerror = () => {
         /* onclose follows */
       };
     } catch (error) {
       this.onError(String(error));
+      this.onDisconnect();
       this.scheduleReconnect();
     }
   }
@@ -58,6 +68,7 @@ export class HarnessEventStream implements vscode.Disposable {
       sessionId?: unknown;
       event?: SessionEvent;
       error?: unknown;
+      items?: unknown;
     } | null;
     if (!inner || typeof inner !== "object") return;
     if (inner.type === "stream/error") {
@@ -69,6 +80,18 @@ export class HarnessEventStream implements vscode.Disposable {
       const event = inner.event;
       if (sessionId && event && typeof event.type === "string") {
         this.onSessionEvent(sessionId, event as SessionEvent);
+      }
+      return;
+    }
+    // Direct mux frames (session/queue, session/jobs, session/subscribed,
+    // approval/*, question/*, ...) arrive as their own type with sessionId and
+    // data fields at the top level — surface them as session events carrying
+    // the frame payload, so consumers see the whole session control plane.
+    if (typeof inner.type === "string" && inner.sessionId !== undefined) {
+      const sessionId = String(inner.sessionId);
+      if (sessionId) {
+        const { sessionId: _sid, type, ...rest } = inner;
+        this.onSessionEvent(sessionId, { type, data: rest as Record<string, unknown> });
       }
     }
   }
