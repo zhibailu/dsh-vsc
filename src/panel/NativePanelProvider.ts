@@ -92,9 +92,14 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       return;
     }
     try {
-      const { items } = await this.client.listSessions();
+      const [list, workspaces] = await Promise.all([
+        this.client.listSessions(),
+        this.client.workspaceList(),
+      ]);
+      const archived = new Set(workspaces.archivedSessionIds);
+      const { items } = list;
       let sessions = items
-        .filter((item) => !item.blank)
+        .filter((item) => !item.blank && !archived.has(item.sessionId))
         .map((item) => ({
           sessionId: item.sessionId,
           running: item.running,
@@ -145,6 +150,24 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /**
+   * Resolve the current VS Code workspace folder to a DSH workspace id
+   * (registering the path idempotently). No folder open → undefined, and new
+   * sessions then fall back to the host's default workspace.
+   */
+  private async resolveWorkspaceId(): Promise<string | undefined> {
+    try {
+      if (!this.client) return undefined;
+      const folders = vscode.workspace.workspaceFolders;
+      if (!folders || folders.length === 0) return undefined;
+      const { workspace } = await this.client.workspaceCreate(folders[0].uri.fsPath);
+      return workspace.workspaceId;
+    } catch (error) {
+      this.log(`workspace: ${(error as Error).message}`);
+      return undefined;
+    }
+  }
+
   private async onMessage(message: WebviewMessage): Promise<void> {
     if (!this.client) {
       this.post({ type: "error", message: "harness 未连接" });
@@ -160,10 +183,13 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         break;
       case "selectSession":
         this.activeSessionId = message.sessionId;
+        // State first: the panel drops history frames for any session that is
+        // not its current activeSessionId, so switch the panel's identity
+        // before shipping history, or the page gets wiped to "no messages".
+        this.postState();
         await this.loadHistory(message.sessionId, undefined);
         await this.postModels();
         await this.postCommands();
-        this.postState();
         break;
       case "getModels":
         await this.postModels();
@@ -180,11 +206,23 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       }
       case "newSession": {
         try {
-          const { sessionId } = await this.client.createSession();
+          const workspaceId = await this.resolveWorkspaceId();
+          const { sessionId } = await this.client.createSession(workspaceId ? { workspaceId } : {});
           this.activeSessionId = sessionId;
           await this.refresh();
         } catch (error) {
           this.post({ type: "error", message: `新建会话失败: ${(error as Error).message}` });
+        }
+        break;
+      }
+      case "deleteSession": {
+        if (!this.activeSessionId) break;
+        try {
+          await this.client.archiveSession(message.sessionId);
+          if (this.activeSessionId === message.sessionId) this.activeSessionId = null;
+          await this.refresh();
+        } catch (error) {
+          this.post({ type: "error", message: `删除会话失败: ${(error as Error).message}` });
         }
         break;
       }
@@ -217,7 +255,8 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         let sessionId = this.activeSessionId;
         if (!sessionId) {
           try {
-            const created = await this.client.createSession();
+            const workspaceId = await this.resolveWorkspaceId();
+            const created = await this.client.createSession(workspaceId ? { workspaceId } : {});
             sessionId = created.sessionId;
             this.activeSessionId = sessionId;
           } catch (error) {

@@ -37,6 +37,7 @@ export type WebviewMessage =
   | { type: "ready" }
   | { type: "selectSession"; sessionId: string }
   | { type: "newSession" }
+  | { type: "deleteSession"; sessionId: string }
   | { type: "send"; text: string; mode?: "queue" | "steer"; attachments?: { mediaType: string; data: string; name?: string }[] }
   | { type: "loadOlder"; beforeSeq: number }
   | { type: "cancel" }
