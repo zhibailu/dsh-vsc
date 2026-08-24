@@ -32,6 +32,10 @@
   #new-session { flex: none; width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 2px;
                  background: transparent; color: var(--fg); cursor: pointer; }
   #new-session:hover { background: var(--input-bg); }
+  #delete-session { flex: none; width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 2px;
+                    background: transparent; color: var(--fg); cursor: pointer; font-size: 12px; line-height: 1; }
+  #delete-session:hover { background: var(--input-bg); }
+  #delete-session[data-arm="1"] { color: var(--err); border-color: var(--err); font-size: 11px; }
   #model-select { flex: none; max-width: 120px; background: var(--input-bg); color: var(--fg);
                   border: 1px solid var(--border); border-radius: 2px; padding: 2px 4px; font-size: 12px; }
 
@@ -131,6 +135,7 @@
     <select id="session-select" title="切换会话"></select>
     <select id="model-select" title="切换模型" hidden></select>
     <button id="new-session" title="新会话">＋</button>
+    <button id="delete-session" title="删除当前会话">🗑</button>
   </header>
   <main id="messages"></main>
   <footer>
@@ -1096,6 +1101,19 @@
     if (selEl.value) post({ type: "selectSession", sessionId: selEl.value });
   });
   $("new-session").addEventListener("click", function () { post({ type: "newSession" }); });
+  var delBtn = $("delete-session");
+  delBtn.addEventListener("click", function () {
+    if (!selEl.value) return;
+    if (delBtn.dataset.arm === "1") {
+      delete delBtn.dataset.arm;
+      delBtn.textContent = "🗑";
+      post({ type: "deleteSession", sessionId: selEl.value });
+    } else {
+      delBtn.dataset.arm = "1";
+      delBtn.textContent = "确认?";
+      setTimeout(function () { delete delBtn.dataset.arm; delBtn.textContent = "🗑"; }, 3000);
+    }
+  });
 
   post({ type: "ready" });
 })();

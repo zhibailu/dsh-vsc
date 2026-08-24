@@ -99,9 +99,22 @@ export const METHODS = {
   sessionModels: "session.models",
   sessionSelectModel: "session.selectModel",
   sessionUpdateQueue: "session.updateQueue",
+  workspaceList: "workspace.list",
+  workspaceCreate: "workspace.create",
+  workspaceArchiveSession: "workspace.archiveSession",
   commandsList: "commands/list",
   commandsExecute: "commands/execute",
 } as const;
+
+/** workspace.list / workspace.create row (DSH workspace domain view). */
+export interface WorkspaceView {
+  workspaceId: string;
+  path: string;
+  title: string;
+  sessionIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
 
 /** session.updateQueue action (edit/remove/steer a queued message). */
 export type QueueAction =

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { METHODS, type ClientRequest, type ServerResponse, type RpcError, type HostDescription, type ModelCatalog, type PromptContentPart, type QueueAction, type SessionSummary } from "./protocol";
+import { METHODS, type ClientRequest, type ServerResponse, type RpcError, type HostDescription, type ModelCatalog, type PromptContentPart, type QueueAction, type SessionSummary, type WorkspaceView } from "./protocol";
 
 /** A business-level RPC failure (result.ok === false). */
 export class RpcErrorResult extends Error {
@@ -67,8 +67,23 @@ export class HarnessClient {
     );
   }
 
-  createSession(): Promise<{ sessionId: string }> {
-    return this.call<{ sessionId: string }>(METHODS.sessionCreate, {});
+  createSession(opts?: { workspaceId?: string }): Promise<{ sessionId: string }> {
+    return this.call<{ sessionId: string }>(METHODS.sessionCreate, opts ?? {});
+  }
+
+  /** Register (or idempotently resolve) a directory as a DSH workspace. */
+  workspaceCreate(path: string): Promise<{ workspace: WorkspaceView; created: boolean }> {
+    return this.call<{ workspace: WorkspaceView; created: boolean }>(METHODS.workspaceCreate, { path });
+  }
+
+  /** All registered workspaces, for path→workspaceId lookups. */
+  workspaceList(): Promise<{ items: WorkspaceView[]; archivedSessionIds: string[] }> {
+    return this.call<{ items: WorkspaceView[]; archivedSessionIds: string[] }>(METHODS.workspaceList, {});
+  }
+
+  /** Archive a session (DSH's delete: hides it from session/workspace lists). */
+  archiveSession(sessionId: string): Promise<{ archivedSessionIds: string[] }> {
+    return this.call<{ archivedSessionIds: string[] }>(METHODS.workspaceArchiveSession, { sessionId });
   }
 
   cancel(sessionId: string): Promise<{ accepted: true }> {
