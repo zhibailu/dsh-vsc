@@ -51,6 +51,9 @@
   .msg.user .body { max-width: 92%; background: var(--input-bg); border: 1px solid var(--border);
                     border-radius: 6px; padding: 6px 10px; white-space: pre-wrap; }
   .msg.assistant .body { white-space: pre-wrap; }
+  .msg .body pre { margin: 4px 0; padding: 6px 8px; background: var(--input-bg); border-radius: 3px;
+    white-space: pre-wrap; word-break: break-all; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
+  .msg .body code { word-break: break-all; }
   .reasoning { border-left: 2px solid var(--border); padding: 2px 10px; color: var(--muted); margin: 4px 0; }
   .reasoning summary { cursor: pointer; user-select: none; font-size: 12px; }
   .reasoning pre { margin: 4px 0; white-space: pre-wrap; font-family: inherit; font-size: 12px; }
@@ -740,7 +743,7 @@
         div.appendChild(k2);
         div.appendChild(n2);
         div.appendChild(d);
-        div.onclick = function () { insertSlash(it.cmd); };
+        div.onclick = function () { runSlash(it.cmd); };
         div.onmouseenter = function () { if (menuIndex !== i) { menuIndex = i; drawMenu(); } };
       } else {
         var kind = document.createElement("span");
@@ -807,14 +810,22 @@
     var m = /(?:^|\s)\/([^\s\/]*)$/.exec(value);
     return m ? { query: m[1], start: m.index + m[0].indexOf("/") } : null;
   }
-  function insertSlash(name) {
+  // Clicking a candidate executes the command IMMEDIATELY (same line as
+  // typing it by hand: exactly "/name", no trailing space). Any text typed
+  // before the slash stays in the input for the next send.
+  function runSlash(name) {
     var m = slashMatch(inputEl.value);
-    var before = m ? inputEl.value.slice(0, m.start) : inputEl.value;
-    var after = m ? inputEl.value.slice(m.start + m.query.length + 1) : "";
-    inputEl.value = before + "/" + name + " " + after;
-    inputEl.focus();
-    autoGrow();
+    if (m) {
+      inputEl.value = inputEl.value.slice(0, m.start);
+      autoGrow();
+    }
     hideMenu();
+    var line = "/" + name;
+    state.items.push({ kind: "user", text: line, pending: true, turn: state.lastTurn });
+    scheduleRender();
+    post({ type: "send", text: line, attachments: [], mode: "queue" });
+    history.push(line);
+    if (history.length > 200) history.shift();
   }
   function slashRows(q) {
     var v = q.trim().toLowerCase();
@@ -823,7 +834,12 @@
     list.forEach(function (c) {
       var name = String(c.name || "").toLowerCase();
       if (v && name.indexOf(v) < 0) return;
-      rows.push({ kind: "slash", name: "/" + c.name + (c.input && c.input.hint ? " " + c.input.hint : ""), desc: c.description || "", cmd: c.name });
+      rows.push({
+        kind: "slash",
+        name: "/" + c.name,
+        desc: (c.description || "") + (c.input && c.input.hint ? " — 带参数请手输 /" + c.name + " " + c.input.hint : ""),
+        cmd: c.name
+      });
     });
     return rows.slice(0, 30);
   }
@@ -963,7 +979,7 @@
         if (it.kind === "up") { currentDir = dirParent(currentDir); refreshMentionMenu(); }
         else if (it.kind === "dir") { currentDir = it.rel; refreshMentionMenu(); }
         else if (it.kind === "file") insertMention(it.rel, false);
-        else if (it.kind === "slash") insertSlash(it.cmd);
+        else if (it.kind === "slash") runSlash(it.cmd);
         else hideMenu();
         return;
       }
@@ -1050,8 +1066,10 @@
     var text = inputEl.value.trim();
     if (!text && attachments.length === 0) return;
     // While the agent is running, Enter queues the message (harness queue);
-    // cap the pending queue at 4.
-    if (text && state.running) {
+    // cap the pending queue at 4. Slash commands never queue — they execute
+    // immediately via commands/execute, so they skip the cap (and must, so a
+    // typed "/compact" can't be blocked by the queue).
+    if (text && state.running && !(text.startsWith("/") && attachments.length === 0)) {
       var queued = state.queue.filter(function (it) { return it.placement === "queued"; }).length;
       if (queued >= 4) {
         statusEl.textContent = "队列已满（最多 4 条）";
