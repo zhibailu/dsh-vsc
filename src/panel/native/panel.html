@@ -69,7 +69,14 @@
               white-space: pre-wrap; word-break: break-all; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
 
   .sys-err { margin: 6px 0; padding: 6px 10px; border-left: 3px solid var(--err); color: var(--err); white-space: pre-wrap; font-size: 12px; }
+  .cmd-note { margin: 6px 0; padding: 4px 10px; border-left: 3px solid var(--ok); color: var(--muted); font-size: 12px; white-space: pre-wrap; }
   .empty { color: var(--muted); text-align: center; margin-top: 40px; font-size: 12px; line-height: 2; }
+  .empty.offline { color: var(--err); }
+  .loading { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 72px; color: var(--muted); }
+  .loading .whale { width: 60px; opacity: .9; animation: whale-bob 2.4s ease-in-out infinite; }
+  .loading .loading-text { font-size: 13px; letter-spacing: .05em; }
+  @keyframes whale-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+  .pill.loading { background: rgba(148, 163, 184, .15); color: var(--muted); }
 
   footer { flex: none; position: relative; border-top: 1px solid var(--border); padding: 6px 8px; }
   #mention-menu { position: absolute; bottom: 100%; left: 8px; right: 8px; max-height: 40vh; overflow-y: auto;
@@ -127,12 +134,12 @@
     <div id="mention-menu" hidden></div>
     <div id="attach-row" hidden></div>
     <div id="queue-row" hidden></div>
-    <div id="input-status"></div>
     <div id="input-row">
       <textarea id="input" rows="1" placeholder="发消息…（Enter 发送，运行中自动排队；Shift+Enter 换行；Ctrl+V 粘图片）"></textarea>
       <button id="send" class="btn primary" title="发送">➤</button>
       <button id="cancel" class="btn" title="停止当前回合" hidden>✕</button>
     </div>
+    <div id="input-status"></div>
   </footer>
 <script>
 (function () {
@@ -144,7 +151,7 @@
       inputEl = $("input"), sendBtn = $("send"), cancelBtn = $("cancel"), statusEl = $("input-status");
 
   var state = {
-    connected: false, version: null,
+    connected: false, version: null, phase: "searching",
     sessions: [], activeSessionId: null,
     items: [], seqs: new Set(), oldestSeq: Infinity,
     running: false, lastTurn: -1,
@@ -153,6 +160,7 @@
     models: null,            // { current: {provider, model}, groups: [...] }
     usage: null,             // active session tokenUsage projection
     queue: [],               // session/queue snapshot for the active session
+    commands: [],            // slash-command catalog (commands/list)
     turnStart: 0, firstTokenAt: 0, turnOutput: 0
   };
 
@@ -355,7 +363,18 @@
     var frag = document.createDocumentFragment();
 
     if (!state.connected) {
-      frag.appendChild(emptyDiv("harness 未连接。<br>状态栏点击「DSH」或命令面板运行「DSH: Start Web Harness」。"));
+      if (state.phase === "offline") {
+        var od = emptyDiv("harness 未连接。<br>状态栏点击「DSH」或命令面板运行「DSH: Start Web Harness」。");
+        od.className = "empty offline";
+        frag.appendChild(od);
+      } else {
+        // searching / starting — the harness is being located or booted.
+        var ld = document.createElement("div");
+        ld.className = "loading";
+        ld.innerHTML = "<img class='whale' src='__WHALE_URI__' alt=''>" +
+          "<span class='loading-text'>DSH 加载中</span>";
+        frag.appendChild(ld);
+      }
     } else if (state.items.length === 0) {
       frag.appendChild(emptyDiv("没有消息。<br>输入框发消息即可开始（会自动创建会话）。"));
     }
@@ -473,6 +492,11 @@
         el.innerHTML = body;
         break;
       }
+      case "cmd": {
+        el.className = item.err ? "sys-err" : "cmd-note";
+        el.textContent = item.text;
+        break;
+      }
       default:
         el.className = "sys-err";
         el.textContent = JSON.stringify(item);
@@ -522,6 +546,7 @@
       case "state": {
         state.connected = msg.connected;
         state.version = msg.version;
+        state.phase = msg.phase || (msg.connected ? "online" : "offline");
         state.sessions = msg.sessions || [];
         state.activeSessionId = msg.activeSessionId;
         if (state.activeSessionId && state.titles[state.activeSessionId] === undefined) {
@@ -593,6 +618,16 @@
         if (msg.sessionId !== state.activeSessionId) return;
         state.queue = msg.items || [];
         renderQueue();
+        break;
+      }
+      case "commands": {
+        state.commands = msg.items || [];
+        if (menuActive && menuMode === "slash") refreshMentionMenu();
+        break;
+      }
+      case "cmdResult": {
+        state.items.push({ kind: "cmd", text: msg.text, err: !msg.ok });
+        scheduleRender();
         break;
       }
       case "error":
@@ -705,7 +740,7 @@
         div.appendChild(k2);
         div.appendChild(n2);
         div.appendChild(d);
-        div.onclick = function () { insertSlash(it.name.slice(1)); };
+        div.onclick = function () { insertSlash(it.cmd); };
         div.onmouseenter = function () { if (menuIndex !== i) { menuIndex = i; drawMenu(); } };
       } else {
         var kind = document.createElement("span");
@@ -757,13 +792,14 @@
     mentionTimer = setTimeout(refreshMentionMenu, 120);
   }
 
-  /* ---------- / command picker (mirrors the DSH slash trigger) ---------- */
+  /* ---------- / command picker (real catalog from commands/list) ---------- */
   var SLASH_COMMANDS = [
-    { name: "compact", desc: "压缩历史" },
-    { name: "goal", desc: "查看 / 设定长任务目标" },
-    { name: "plan", desc: "进入 / 退出计划模式" },
-    { name: "permission", desc: "切换权限预设（沙箱 + 审批）" },
-    { name: "feedback", desc: "反馈本次会话" }
+    { name: "compact", description: "压缩历史" },
+    { name: "export", description: "导出会话日志（ZIP）" },
+    { name: "feedback", description: "反馈本次会话", input: { hint: "<text>" } },
+    { name: "goal", description: "查看 / 设定长任务目标", input: { hint: "[<objective>|clear|edit <objective>|pause|resume]" } },
+    { name: "permission", description: "切换权限预设（沙箱 + 审批）", input: { hint: "<preset>" } },
+    { name: "plan", description: "进入 / 退出计划模式", input: { hint: "[off|message]" } }
   ];
   function slashMatch(value) {
     // '/' at line start or after whitespace; a second '/' or an inline URL
@@ -782,10 +818,12 @@
   }
   function slashRows(q) {
     var v = q.trim().toLowerCase();
+    var list = state.commands && state.commands.length ? state.commands : SLASH_COMMANDS;
     var rows = [];
-    SLASH_COMMANDS.forEach(function (c) {
-      if (v && c.name.indexOf(v) < 0) return;
-      rows.push({ kind: "slash", name: "/" + c.name, desc: c.desc });
+    list.forEach(function (c) {
+      var name = String(c.name || "").toLowerCase();
+      if (v && name.indexOf(v) < 0) return;
+      rows.push({ kind: "slash", name: "/" + c.name + (c.input && c.input.hint ? " " + c.input.hint : ""), desc: c.description || "", cmd: c.name });
     });
     return rows.slice(0, 30);
   }
@@ -796,9 +834,14 @@
       pillEl.className = "pill " + (state.running ? "busy" : "on");
       pillEl.textContent = state.running ? "● 运行中" : "● 已连接";
       pillEl.title = "harness v" + (state.version || "?");
-    } else {
+    } else if (state.phase === "offline") {
       pillEl.className = "pill off";
       pillEl.textContent = "○ 离线";
+      pillEl.title = "DSH Bridge: no harness reachable";
+    } else {
+      pillEl.className = "pill loading";
+      pillEl.textContent = "○";
+      pillEl.title = "DSH Bridge: 正在加载…";
     }
     selEl.innerHTML = "";
     state.sessions.forEach(function (sess) {
@@ -841,6 +884,23 @@
     if (!state.connected) { statusEl.textContent = ""; return; }
     var groups = [];
     var act = state.sessions.find(function (x) { return x.sessionId === state.activeSessionId; });
+    var ring = "";
+    var ctx = act && act.context;
+    if (ctx && typeof ctx.contextWindow === "number") {
+      var used = ctx.projectedTokens != null ? ctx.projectedTokens : ctx.pressureTokens;
+      if (typeof used === "number") {
+        var pct = Math.min(100, Math.round((used / ctx.contextWindow) * 100));
+        var R = 5, C = 2 * Math.PI * R;
+        var frac = Math.max(0.02, pct / 100);
+        var col = pct >= 90 ? "var(--err)" : pct >= 70 ? "#e0b94a" : "var(--ok)";
+        ring = "<span title='上下文占用 ~" + fmtTok(used) + " / " + fmtTok(ctx.contextWindow) + " tok' style='white-space:nowrap;vertical-align:middle'>" +
+          "<svg width='13' height='13' viewBox='0 0 14 14' style='vertical-align:-2px;margin-right:3px'>" +
+          "<circle cx='7' cy='7' r='" + R + "' fill='none' stroke='var(--border)' stroke-width='2'/>" +
+          "<circle cx='7' cy='7' r='" + R + "' fill='none' stroke='" + col + "' stroke-width='2' stroke-linecap='round' " +
+          "stroke-dasharray='" + (frac * C).toFixed(2) + " " + C.toFixed(2) + "' transform='rotate(-90 7 7)'/>" +
+          "</svg>" + pct + "%</span>";
+      }
+    }
     var st = act && act.stats;
     if (st && st.steps > 0) {
       groups.push((st.turns || 0) + " 轮 · " + st.steps + " 步");
@@ -871,7 +931,11 @@
       }
       line = (live.length ? live.join(" · ") + " | " : "") + line;
     }
-    statusEl.textContent = line;
+    if (ring) {
+      statusEl.innerHTML = ring + (line ? "&nbsp;|&nbsp;" + esc(line) : "");
+    } else {
+      statusEl.textContent = line;
+    }
   }
 
   /* ---------- input ---------- */
@@ -899,7 +963,7 @@
         if (it.kind === "up") { currentDir = dirParent(currentDir); refreshMentionMenu(); }
         else if (it.kind === "dir") { currentDir = it.rel; refreshMentionMenu(); }
         else if (it.kind === "file") insertMention(it.rel, false);
-        else if (it.kind === "slash") insertSlash(it.name.slice(1));
+        else if (it.kind === "slash") insertSlash(it.cmd);
         else hideMenu();
         return;
       }

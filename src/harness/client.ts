@@ -87,6 +87,27 @@ export class HarnessClient {
     return this.call<{ accepted: true }>(METHODS.sessionUpdateQueue, { sessionId, itemId, action });
   }
 
+  /** Slash-command catalog for a session (wire: commands/list, endpoint form). */
+  commandList(
+    sessionId: string
+  ): Promise<{ name: string; description?: string; input?: { hint?: string; images?: boolean } }[]> {
+    return this.call<{ name: string; description?: string; input?: { hint?: string; images?: boolean } }[]>(
+      METHODS.commandsList,
+      { args: { agentId: sessionId } }
+    );
+  }
+
+  /** Execute one slash-command line against a session. */
+  commandExecute(
+    sessionId: string,
+    line: string
+  ): Promise<{ commandId?: string; result?: { kind: string; text?: string } } | undefined> {
+    return this.call<{ commandId?: string; result?: { kind: string; text?: string } } | undefined>(
+      METHODS.commandsExecute,
+      { args: { agentId: sessionId, line, images: [] } }
+    );
+  }
+
   /** Cheap liveness probe: host.describe within a timeout. */
   async isAlive(timeoutMs = 1500): Promise<HostDescription | null> {
     try {

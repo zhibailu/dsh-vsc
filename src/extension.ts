@@ -106,6 +106,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const base = configuredBase();
       const port = portOf(base);
       status.setStarting(port);
+      panel.setPhase("starting");
       await startHarness(port, log);
       await waitUntilAlive(base, START_TIMEOUT_MS);
     } finally {

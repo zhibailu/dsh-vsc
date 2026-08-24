@@ -1,8 +1,11 @@
 .vscode/**
 src/**
 scripts/**
+scratch/**
 node_modules/**
 esbuild.js
 tsconfig.json
 *.vsix
 **/*.tsbuildinfo
+PLAN.md
+.gitignore

@@ -21,6 +21,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
   private titles = new Map<string, string>();
   private connected = false;
   private version?: string;
+  private phase: "searching" | "starting" | "online" | "offline" = "searching";
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -75,7 +76,14 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     this.client = client;
     this.connected = client !== null;
     this.version = version;
+    this.phase = client ? "online" : "offline";
     void this.refresh();
+  }
+
+  /** Loading-phase hint from the extension (searching / starting). */
+  setPhase(phase: "searching" | "starting" | "online" | "offline"): void {
+    this.phase = phase;
+    this.postState();
   }
 
   async refresh(): Promise<void> {
@@ -95,6 +103,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           title: item.projections?.values?.title ?? undefined,
           usage: item.projections?.values?.tokenUsage ?? undefined,
           stats: item.projections?.values?.sessionStats ?? undefined,
+          context: item.projections?.values?.contextPressure ?? undefined,
         }))
         .sort((a, b) => b.updatedAt - a.updatedAt);
       // A freshly created session is blank until its first prompt; keep it
@@ -108,6 +117,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           title: "新会话",
           usage: undefined,
           stats: undefined,
+          context: undefined,
         });
       }
       this.sessions = sessions;
@@ -118,9 +128,20 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       if (this.activeSessionId) {
         await this.loadHistory(this.activeSessionId, undefined);
         await this.postModels();
+        await this.postCommands();
       }
     } catch (error) {
       this.post({ type: "error", message: `会话列表失败: ${(error as Error).message}` });
+    }
+  }
+
+  private async postCommands(): Promise<void> {
+    if (!this.client || !this.activeSessionId) return;
+    try {
+      const items = await this.client.commandList(this.activeSessionId);
+      this.post({ type: "commands", items });
+    } catch (error) {
+      this.log(`commands: ${(error as Error).message}`);
     }
   }
 
@@ -141,6 +162,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         this.activeSessionId = message.sessionId;
         await this.loadHistory(message.sessionId, undefined);
         await this.postModels();
+        await this.postCommands();
         this.postState();
         break;
       case "getModels":
@@ -202,6 +224,22 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
             this.post({ type: "error", message: `新建会话失败: ${(error as Error).message}` });
             return;
           }
+        }
+        // A leading-slash line is a real slash command — dispatch it through the
+        // commands domain instead of sending it to the agent as plain text.
+        if (mode === "queue" && text && text.startsWith("/") && content.length === 1) {
+          try {
+            const outcome = await this.client.commandExecute(sessionId, text);
+            this.post({
+              type: "cmdResult",
+              text: outcome?.result?.text ?? `命令已执行：${text}`,
+              ok: outcome?.result?.kind !== "error",
+            });
+            await this.refresh();
+          } catch (error) {
+            this.post({ type: "error", message: `命令执行失败: ${(error as Error).message}` });
+          }
+          return;
         }
         try {
           await this.client.prompt(sessionId, content, mode);
@@ -320,6 +358,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       type: "state",
       connected: this.connected,
       version: this.version,
+      phase: this.phase,
       // live title event wins; otherwise the projection title from session.list
       sessions: this.sessions.map((s) => ({ ...s, title: this.titles.get(s.sessionId) ?? s.title })),
       activeSessionId: this.activeSessionId,
@@ -336,6 +375,15 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
 
   private renderHtml(): string {
     const panelPath = vscode.Uri.joinPath(this.context.extensionUri, "dist", "media", "native", "panel.html");
-    return fs.readFileSync(panelPath.fsPath, "utf8");
+    let html = fs.readFileSync(panelPath.fsPath, "utf8");
+    try {
+      const whaleUri = this.view?.webview.asWebviewUri(
+        vscode.Uri.joinPath(this.context.extensionUri, "dist", "media", "dsh-whale.svg")
+      );
+      html = html.replaceAll("__WHALE_URI__", whaleUri?.toString() ?? "");
+    } catch {
+      /* keep the placeholder; the loading view degrades to text */
+    }
+    return html;
   }
 }

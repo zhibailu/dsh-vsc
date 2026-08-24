@@ -74,6 +74,11 @@ export interface SessionSummary {
         decodeMs?: number;
         decodeTokens?: number;
       } | null;
+      contextPressure?: {
+        projectedTokens?: number;
+        pressureTokens?: number;
+        contextWindow?: number;
+      } | null;
     };
   };
 }
@@ -94,6 +99,8 @@ export const METHODS = {
   sessionModels: "session.models",
   sessionSelectModel: "session.selectModel",
   sessionUpdateQueue: "session.updateQueue",
+  commandsList: "commands/list",
+  commandsExecute: "commands/execute",
 } as const;
 
 /** session.updateQueue action (edit/remove/steer a queued message). */

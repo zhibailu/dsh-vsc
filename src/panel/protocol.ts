@@ -17,6 +17,7 @@ export type HostMessage =
       type: "state";
       connected: boolean;
       version?: string;
+      phase?: "searching" | "starting" | "online" | "offline";
       sessions: PanelSession[];
       activeSessionId: string | null;
     }
@@ -27,6 +28,8 @@ export type HostMessage =
   | { type: "index"; files: string[]; dirs: string[] }
   | { type: "models"; current?: { provider: string; model: string }; groups: { id: string; name: string; models: { id: string; name: string }[] }[] }
   | { type: "queue"; sessionId: string; items: { id: string; placement: string; text: string }[] }
+  | { type: "commands"; items: { name: string; description?: string; input?: { hint?: string; images?: boolean } }[] }
+  | { type: "cmdResult"; text: string; ok: boolean }
   | { type: "error"; message: string };
 
 /** Webview → host messages. */
@@ -68,5 +71,11 @@ export interface PanelSession {
     ttftSteps?: number;
     decodeMs?: number;
     decodeTokens?: number;
+  };
+  /** contextPressure projection — context occupancy ring source. */
+  context?: {
+    projectedTokens?: number;
+    pressureTokens?: number;
+    contextWindow?: number;
   };
 }
