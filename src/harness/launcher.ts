@@ -120,12 +120,13 @@ async function resolveLauncher(): Promise<{ node: string; script: string } | nul
 /**
  * Start `dsh web` as a DETACHED, WINDOWLESS background process (no console,
  * no cmd shim). Direct `node bin.js` spawn with windowsHide = CREATE_NO_WINDOW:
- * - detached + stdio:'ignore' + unref: survives VS Code closing, so the harness
- *   stays a shared service (the browser GUI keeps working).
+ * - detached + stdio:'ignore' + unref: the harness is owned by this extension
+ *   and is closed when VS Code exits (deactivate → stopHarness).
  * - no console anywhere in the tree, so there is nothing to close and nothing
  *   to kill by accident.
  * - GITHUB_TOKEN resolved (process env, then Windows user env).
- * Stop it with the `dsh.stop` command (taskkill /T kills the whole tree).
+ * Stop it with the `dsh.stop` command or by closing VS Code
+ * (taskkill /T kills the whole tree).
  */
 export async function startHarness(port: number, log: vscode.OutputChannel): Promise<void> {
   if (isRunning()) return;
@@ -157,12 +158,16 @@ export async function startHarness(port: number, log: vscode.OutputChannel): Pro
   child.unref();
 }
 
-/** Kill the auto-started harness (and its whole process tree). */
-export function stopHarness(): void {
-  if (!child || child.exitCode !== null) return;
+/** Kill the auto-started harness (and its whole process tree). Only ever
+ *  touches the process THIS extension spawned; a pre-existing/shared harness
+ *  is never killed. Resolves with what actually happened. */
+export function stopHarness(): Promise<{ killed: boolean; pid?: number; error?: string }> {
+  if (!child || child.exitCode !== null) return Promise.resolve({ killed: false });
   const pid = child.pid;
-  execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, () => {
-    /* settled either way */
-  });
   child = undefined;
+  return new Promise((resolve) => {
+    execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, (error) => {
+      resolve(error ? { killed: false, pid, error: error.message } : { killed: true, pid });
+    });
+  });
 }
