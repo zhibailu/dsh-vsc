@@ -1,4 +1,7 @@
 import * as vscode from "vscode";
+import * as fs from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { NativePanelProvider } from "./panel/NativePanelProvider";
 import { renderEmbedHtml } from "./panel/embed";
 import { DshStatusBar } from "./status";
@@ -229,6 +232,22 @@ function openWebView(context: vscode.ExtensionContext, log: vscode.OutputChannel
   }
 }
 
-export function deactivate(): void {
-  // Do not kill the harness: it is a shared service, not owned by this extension.
+const DEACTIVATE_LOG = join(tmpdir(), "dsh-vsc-deactivate.log");
+
+function logDeactivate(line: string): void {
+  try {
+    fs.appendFileSync(DEACTIVATE_LOG, `[${new Date().toISOString()}] ${line}\n`);
+  } catch {
+    /* logging must never break shutdown */
+  }
+}
+
+export function deactivate(): Promise<void> {
+  // Close the harness this extension auto-started when VS Code exits, so no
+  // orphaned dsh keeps running in the background. A pre-existing/shared
+  // harness (not spawned by us) is left untouched — same rule as dsh.stop.
+  logDeactivate("deactivate called");
+  return stopHarness().then((result) => {
+    logDeactivate(`stopHarness -> ${JSON.stringify(result)}`);
+  });
 }
