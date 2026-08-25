@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: vscode-webview-resource:;">
 <title>DSH</title>
 <style>
   :root {
@@ -81,7 +81,7 @@
   .empty.offline { color: var(--err); }
   .loading { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 72px; color: var(--muted); }
   .loading .whale { width: 60px; opacity: .9; animation: whale-bob 2.4s ease-in-out infinite; }
-  .loading .loading-text { font-size: 13px; letter-spacing: .05em; }
+  .loading .loading-text { font-size: 15px; letter-spacing: .05em; color: var(--fg); }
   @keyframes whale-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
   .pill.loading { background: rgba(148, 163, 184, .15); color: var(--muted); }
 
@@ -505,6 +505,11 @@
         el.textContent = item.text;
         break;
       }
+      case "error": {
+        el.className = "sys-err";
+        el.textContent = item.text;
+        break;
+      }
       default:
         el.className = "sys-err";
         el.textContent = JSON.stringify(item);
@@ -552,11 +557,17 @@
     if (!msg || typeof msg !== "object") return;
     switch (msg.type) {
       case "state": {
+        var wasConnected = state.connected;
         state.connected = msg.connected;
         state.version = msg.version;
         state.phase = msg.phase || (msg.connected ? "online" : "offline");
         state.sessions = msg.sessions || [];
         state.activeSessionId = msg.activeSessionId;
+        // Transient errors (e.g. "harness 未连接" fired while booting) should
+        // vanish once connectivity comes back.
+        if (msg.connected && !wasConnected) {
+          state.items = state.items.filter(function (it) { return it.kind !== "error"; });
+        }
         if (state.activeSessionId && state.titles[state.activeSessionId] === undefined) {
           state.titles[state.activeSessionId] = undefined;
         }
