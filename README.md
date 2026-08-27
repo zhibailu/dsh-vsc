@@ -45,3 +45,4 @@ code --install-extension dsh-vsc-0.1.0.vsix
 
 - `docs/incident-2026-08-27-reasoning-fold.md` — 推理折叠流式中途不可展开的事故复盘（含行为轨迹与教训）
 - `docs/incident-2026-08-27-tool-bundles.md` — 工具动作分组（「⚙ 动作」大块）与计时器残留的事故复盘（含行为轨迹与教训）
+- `docs/incident-2026-08-27-missing-text.md` — 流式文字缺失事故复盘：长兜圈子问题（观测缺失 / 过早宣布成功 / 基线对照）与最终自动化测试收敛路径
