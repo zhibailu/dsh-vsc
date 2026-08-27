@@ -474,8 +474,15 @@
         var msg = d.message || d;
         var u = textBlocksOf(msg);
         if (u) {
-          var last = state.items[state.items.length - 1];
-          if (last && last.kind === "user" && last.pending) { last.text = u; last.pending = false; last.turn = d.turn; last.version = (last.version || 0) + 1; }
+          // Update the newest PENDING user bubble wherever it sits in the
+          // list. send() optimistically inserts a pending bubble, and a
+          // history replay right after prompt can push a turn item past it —
+          // matching only the LAST item would then create a duplicate bubble.
+          var pend = null;
+          for (var ui = state.items.length - 1; ui >= 0; ui--) {
+            if (state.items[ui].kind === "user" && state.items[ui].pending) { pend = state.items[ui]; break; }
+          }
+          if (pend) { pend.text = u; pend.pending = false; pend.turn = d.turn; pend.version = (pend.version || 0) + 1; }
           else state.items.push({ kind: "user", text: u, turn: d.turn });
         }
         break;
@@ -882,6 +889,14 @@
           curGroup.tools.push(it);
         }
       } else {
+        // A completed assistant with zero content blocks (a bare tool-call
+        // step: message content was only tool-call) has nothing visible —
+        // skip it instead of rendering an empty card with a pointless copy
+        // button. It also must NOT split the tool run: it is invisible, so
+        // the actions around it still LOOK consecutive and merge.
+        if (it.kind === "assistant" && !it.streaming && (!it.blocks || it.blocks.length === 0)) {
+          continue;
+        }
         curGroup = null;
         plan.push({ kind: it.kind, key: String(it.id), item: it, frozen: frozen });
       }
