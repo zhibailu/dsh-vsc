@@ -881,8 +881,13 @@
       if (!it.id) it.id = state.nextItemId++;
       var frozen = i <= frozenEnd && !state.dirtySync;
       if (it.kind === "tool") {
-        var gk = "gt" + String(it.turn);
-        if (!curGroup || curGroup.key !== gk) {
+        // Merge only truly adjacent tool calls ("本来就挨着一起的就合并"):
+        // one group per CONTIGUOUS run. A visible thinking/text message
+        // between calls splits the run (each run keeps its own container at
+        // its own position); the run's key rides on its FIRST tool's stable
+        // id so appends reuse the same container.
+        if (!curGroup) {
+          var gk = "gt" + String(it.turn) + "-" + String(it.id);
           curGroup = { kind: "group", key: gk, tools: [it], frozen: frozen };
           plan.push(curGroup);
         } else {
