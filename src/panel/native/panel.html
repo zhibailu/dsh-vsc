@@ -47,8 +47,21 @@
   .attach-chip .ax { cursor: pointer; color: var(--err); font-weight: 700; padding: 0 2px; }
 
   #messages { flex: 1; overflow-y: auto; padding: 8px 10px; }
+  #history-sentinel { height: 1px; }
   .turn-sep { display: flex; align-items: center; gap: 8px; margin: 14px 0 8px; color: var(--muted); font-size: 11px; }
   .turn-sep::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  /* turn summary strip — pinned to the END of a finished turn, so the totals
+     (用时 + +N-M) are visible right where the newest content is, without
+     scrolling back up to the turn's start separator */
+  .turn-summary { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 10px 0 14px;
+                  padding-top: 6px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+  .turn-summary .check { color: var(--ok); font-weight: 700; }
+  .turn-summary details.turn-diff { flex-basis: 100%; margin-top: 2px; }
+  .turn-diff summary { cursor: pointer; user-select: none; color: var(--muted); font-size: 11px; padding: 2px 0; }
+  .turn-diff summary:hover { color: var(--fg); }
+  .turn-diff .td-file { display: flex; align-items: center; gap: 6px; padding: 2px 0 2px 14px; cursor: pointer; border-radius: 2px; }
+  .turn-diff .td-file:hover { background: rgba(128, 128, 128, .08); }
+  .turn-diff .td-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .msg { margin: 6px 0; line-height: 1.55; word-wrap: break-word; }
   .msg.user { display: flex; justify-content: flex-end; }
@@ -59,8 +72,11 @@
     white-space: pre-wrap; word-break: break-all; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
   .msg .body code { word-break: break-all; }
   .reasoning { border-left: 2px solid var(--border); padding: 2px 10px; color: var(--muted); margin: 4px 0; }
-  .reasoning summary { cursor: pointer; user-select: none; font-size: 12px; }
-  .reasoning pre { margin: 4px 0; white-space: pre-wrap; font-family: inherit; font-size: 12px; }
+  .reasoning-head { cursor: pointer; user-select: none; font-size: 12px; color: var(--muted); }
+  .reasoning-head:hover { color: var(--fg); }
+  .reasoning-body { margin: 4px 0; white-space: pre-wrap; max-height: 240px; overflow-y: auto; }
+  .reasoning-body[hidden] { display: none; }
+  .reasoning-body pre { margin: 4px 0; white-space: pre-wrap; font-family: inherit; font-size: 12px; }
   .msg .stream-cursor::after { content: "▍"; animation: blink 1s steps(1) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
 
@@ -70,12 +86,38 @@
   .tool .dot.run { background: #e0b94a; animation: blink 1s infinite; }
   .tool .dot.ok { background: var(--ok); }
   .tool .dot.err { background: var(--err); }
-  .tool .tname { font-weight: 600; }
+  .tool .tname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  /* tool group: consecutive internal tool calls bundled behind one fold —
+     open the group, then open an individual tool to see its args/result */
+  .tool-group { border: 1px solid var(--border); border-radius: 4px; margin: 6px 0; overflow: hidden; }
+  .tool-group > summary { cursor: pointer; user-select: none; padding: 4px 8px; font-size: 12px;
+                          display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .tool-group > summary:hover { color: var(--fg); }
+  .tool-group > summary .g-title { font-weight: 600; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tool-group > summary::after { content: "▸"; margin-left: auto; opacity: .7; }
+  .tool-group[open] > summary::after { content: "▾"; }
+  .tool-group .g-body { border-top: 1px solid var(--border); }
+  .tool-group .tool { border: none; border-radius: 0; margin: 0; border-top: 1px solid var(--border); }
+  .tool-group .tool:first-child { border-top: none; }
   .tool .targs { padding: 0 8px 6px; }
   .tool .tlabel { font-size: 11px; color: var(--muted); margin: 4px 0 2px; }
   .tool pre { margin: 4px 0; padding: 6px 8px; background: var(--input-bg); border-radius: 3px;
               white-space: pre-wrap; word-break: break-all; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px;
               position: relative; padding-right: 56px; }
+
+  /* bridge metrics: "+N-M" diff chips (always visible on the fold row) and
+     the live per-round timer (only on the currently running round) */
+  .diff-chip { display: inline-flex; align-items: baseline; gap: 3px; margin-left: 6px;
+               font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+               user-select: none; white-space: nowrap; vertical-align: middle; }
+  .diff-chip .da { color: var(--vscode-gitDecoration-addedResourceForeground, #89d185); }
+  .diff-chip .dd { color: var(--vscode-gitDecoration-deletedResourceForeground, #f48771); }
+  .diff-chip.pop .da, .diff-chip.pop .dd { animation: chip-pop .4s ease; }
+  @keyframes chip-pop { 0% { transform: scale(1.45); } 100% { transform: scale(1); } }
+  .live-timer { margin-left: 6px; font-size: 11px; color: #e0b94a; font-weight: 600;
+                font-variant-numeric: tabular-nums; white-space: nowrap; vertical-align: middle; }
+  .turn-sep .live-timer { color: var(--muted); font-weight: 400; }
+  .turn-total { color: var(--muted); font-weight: 400; }
 
   /* markdown tables (GFM, mirrors web GUI) */
   .md-table { overflow-x: auto; margin: 6px 0; border: 1px solid var(--border); border-radius: 3px; }
@@ -177,7 +219,7 @@
     <button id="new-session" title="新会话">＋</button>
     <button id="delete-session" title="删除当前会话">🗑</button>
   </header>
-  <main id="messages"></main>
+  <main id="messages"><div id="history-sentinel"></div></main>
   <footer>
     <div id="mention-menu" hidden></div>
     <div id="attach-row" hidden></div>
@@ -202,7 +244,8 @@
       modelEl = $("model-select"), attachEl = $("attach-row"), queueEl = $("queue-row"),
       inputEl = $("input"), sendBtn = $("send"), cancelBtn = $("cancel"), statusEl = $("input-status"),
       todoBarEl = $("todo-bar"), todoToggleEl = $("todo-toggle"), todoListEl = $("todo-list"),
-      todoCountEl = $("todo-count"), todoChevronEl = $("todo-chevron");
+      todoCountEl = $("todo-count"), todoChevronEl = $("todo-chevron"),
+      sentinelEl = $("history-sentinel");
 
   var state = {
     connected: false, version: null, phase: "searching",
@@ -218,7 +261,14 @@
     todos: [],               // todos projection for the active session
     todoCache: null,         // { sessionId, items } — latest todos seen, survives session switches
     todoOpen: false,         // task-bar expanded?
-    turnStart: 0, firstTokenAt: 0, turnOutput: 0
+    hasMore: false,          // older history pages available
+    loadingOlder: false,     // a loadOlder request is in flight
+    turnStart: 0, firstTokenAt: 0, turnOutput: 0,
+    diffByCall: {},          // callId -> {added, deleted} (bridge-computed "+N-M")
+    turnStartTime: 0,        // epoch ms of the current turn/start event
+    turnStartPerf: 0,        // performance.now() at the current turn/start
+    activeRound: null,       // {kind:"tool", callId} | {kind:"assistant"} | null
+    nextItemId: 1            // stable per-item ids (reasoning fold state, etc.)
   };
 
   function post(msg) { try { vscode.postMessage(msg); } catch (e) {} }
@@ -242,31 +292,11 @@
       .replace(/`([^`]+)`/g, "<code>$1</code>")
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   }
-  /** Split a plain-text block into GFM table rows and non-table lines.
-   *  A table: a header line of |cells|, a separator line of |---|, then rows. */
+  /** GFM table separator line check: a row of |---| (optionally :aligned:). */
   function isTableSeparator(line) {
     var cells = line.trim().replace(/^\||\|$/g, "").split("|");
     if (cells.length < 2) return false;
     return cells.every(function (c) { return /^\s*:?-+:?\s*$/.test(c.trim()); });
-  }
-  function splitTable(block) {
-    var lines = block.split("\n");
-    var out = [];
-    var i = 0;
-    while (i < lines.length) {
-      var l = lines[i];
-      // peek: current line + next line form a table header + separator?
-      if (l.indexOf("|") !== -1 && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
-        var table = [l, lines[i + 1]];
-        i += 2;
-        while (i < lines.length && lines[i].indexOf("|") !== -1) { table.push(lines[i]); i++; }
-        out.push({ type: "table", rows: table });
-      } else {
-        out.push({ type: "text", text: l });
-        i++;
-      }
-    }
-    return out;
   }
   function renderTable(rows) {
     var header = rows[0];
@@ -274,7 +304,10 @@
       return line.trim().replace(/^\||\|$/g, "").split("|").map(function (c) { return c.trim(); });
     };
     var head = split(header);
-    var body = rows.slice(2);
+    // rows = [header, dataRow, ...]; the |---| separator may or may not be
+    // present at index 1 depending on caller — skip it if so.
+    var body = rows.slice(1);
+    if (body.length > 0 && isTableSeparator(body[0])) body = body.slice(1);
     var html = "<div class='md-table'><table><thead><tr>";
     for (var h = 0; h < head.length; h++) html += "<th>" + renderInline(head[h]) + "</th>";
     html += "</tr></thead><tbody>";
@@ -287,24 +320,44 @@
     html += "</tbody></table></div>";
     return html;
   }
+  /** Line-based markdown-lite renderer.
+   *  Walks lines left to right and classifies each into:
+   *   - fenced code block (``` ... ```)   -> <pre class='md-code'>
+   *   - GFM table (header + |---| sep)    -> <table>
+   *   - ordinary text                     -> renderInline
+   *  Line-first ordering keeps a ``` inside a table cell from splitting the
+   *  table, and a | inside a code block from faking a table. */
   function renderText(text) {
-    var parts = String(text).split(/```/);
+    var lines = String(text).split("\n");
     var out = "";
-    for (var i = 0; i < parts.length; i++) {
-      if (i % 2 === 0) {
-        var block = parts[i];
-        var segs = splitTable(block);
-        for (var s = 0; s < segs.length; s++) {
-          if (segs[s].type === "table") out += renderTable(segs[s].rows);
-          else out += renderInline(segs[s].text) + (s < segs.length - 1 ? "\n" : "");
-        }
-      } else {
-        var lines = parts[i].split("\n");
-        if (lines[0] && /^[a-zA-Z0-9_-]+$/.test(lines[0].trim())) lines.shift();
-        var code = esc(lines.join("\n"));
-        out += "<pre class='md-code'><code>" + code + "</code>"
+    var i = 0;
+    while (i < lines.length) {
+      var line = lines[i];
+      var t = line.trim();
+      // fenced code block
+      if (t.indexOf("```") === 0) {
+        var lang = t.slice(3).trim();
+        var buf = [];
+        i++;
+        while (i < lines.length && lines[i].trim().indexOf("```") !== 0) { buf.push(lines[i]); i++; }
+        i++; // closing fence
+        var code = esc(buf.join("\n"));
+        out += "<pre class='md-code'><code" + (lang ? " data-lang='" + esc(lang) + "'" : "") + ">" + code + "</code>"
              + "<button class='block-copy' title='复制代码'>⧉ 复制</button></pre>";
+        continue;
       }
+      // GFM table: header + separator line
+      if (t.indexOf("|") !== -1 && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+        var rows = [line];
+        i += 2;
+        while (i < lines.length && lines[i].indexOf("|") !== -1) { rows.push(lines[i]); i++; }
+        out += renderTable(rows);
+        continue;
+      }
+      // ordinary line
+      out += renderInline(line);
+      i++;
+      if (i < lines.length) out += "\n";
     }
     return out;
   }
@@ -339,13 +392,40 @@
   function finalizeStream() {
     if (state.curAssistant) {
       state.curAssistant.streaming = false;
+      state.curAssistant.version = (state.curAssistant.version || 0) + 1;
       state.curAssistant = null;
     }
     state.openBlocks = [];
   }
+  /** Cancel-safe turn end: DSH's cancel() stops the turn WITHOUT a turn/end
+   *  event, so the running clock (and every live timer) would otherwise keep
+   *  counting forever. Called when the host reports running:false; stops all
+   *  timers and leaves the final summary to a real turn/end if it ever lands. */
+  function softEndTurn() {
+    finalizeStream();
+    state.activeRound = null;
+    for (var i = state.items.length - 1; i >= 0; i--) {
+      var it = state.items[i];
+      // Running tool calls that never got a result keep their live timer —
+      // mark them done and force a partial update so syncToolEl drops it
+      // once activeRound is null.
+      if (it.kind === "tool" && it.status === "running") {
+        it.status = "ok";
+        it.version = (it.version || 0) + 1;
+      } else if (it.kind === "turn" && !it.done) {
+        it.done = true;
+        it.endTime = Date.now();
+        if (it.startTime) it.elapsed = Math.max(0, it.endTime - it.startTime);
+        it.totalDiff = aggregateTurnDiff(state.items, it.turn);
+        it.version = (it.version || 0) + 1;
+        break;
+      }
+    }
+    scheduleRender();
+  }
   function ensureAssistant() {
     if (!state.curAssistant) {
-      state.curAssistant = { kind: "assistant", blocks: [], done: false, streaming: true };
+      state.curAssistant = { kind: "assistant", blocks: [], done: false, streaming: true, startPerf: performance.now() };
       state.items.push(state.curAssistant);
     }
   }
@@ -356,8 +436,12 @@
       .map(function (b) { return { type: b.type, text: b.text }; });
   }
   function findTool(callId) {
+    // Normalize to string: tool/call stores String(callId) while tool/result's
+    // toolCallId can arrive as a number — a strict compare would miss the
+    // match and leave the card "running" with a live timer forever.
+    var cid = String(callId);
     for (var i = state.items.length - 1; i >= 0; i--) {
-      if (state.items[i].kind === "tool" && state.items[i].callId === callId) return state.items[i];
+      if (state.items[i].kind === "tool" && state.items[i].callId === cid) return state.items[i];
     }
     return null;
   }
@@ -374,7 +458,14 @@
         finalizeStream();
         state.lastTurn = typeof d.turn === "number" ? d.turn : state.lastTurn + 1;
         state.turnStart = performance.now(); state.firstTokenAt = 0; state.turnOutput = 0;
-        state.items.push({ kind: "turn", turn: state.lastTurn, done: false });
+        state.turnStartTime = typeof ev.time === "number" ? ev.time : Date.now();
+        state.turnStartPerf = performance.now();
+        state.activeRound = null;
+        // A new round is user-visible content: unfreeze even if the user was
+        // reading history, or the whole new round would never render.
+        if (suspended) { suspended = false; forceBottom = true; }
+        state.items.push({ kind: "turn", turn: state.lastTurn, done: false,
+                           startTime: state.turnStartTime, startPerf: state.turnStartPerf });
         break;
       case "user/message": {
         // user/message carries content at data.content (assistant/message wraps
@@ -383,7 +474,7 @@
         var u = textBlocksOf(msg);
         if (u) {
           var last = state.items[state.items.length - 1];
-          if (last && last.kind === "user" && last.pending) { last.text = u; last.pending = false; last.turn = d.turn; }
+          if (last && last.kind === "user" && last.pending) { last.text = u; last.pending = false; last.turn = d.turn; last.version = (last.version || 0) + 1; }
           else state.items.push({ kind: "user", text: u, turn: d.turn });
         }
         break;
@@ -396,10 +487,17 @@
         } else if (chunk.type === "usage") {
           if (chunk.usage && typeof chunk.usage.outputTokens === "number") state.turnOutput = chunk.usage.outputTokens;
         } else if (chunk.type === "text-delta" || chunk.type === "reasoning-delta") {
+          // The newest round is now the assistant's reply (its own live timer);
+          // a transition from tool→assistant starts a fresh reply round.
+          if (state.activeRound === null || state.activeRound.kind !== "assistant") {
+            state.activeRound = { kind: "assistant" };
+            if (state.curAssistant) state.curAssistant.startPerf = performance.now();
+          }
           if (!state.firstTokenAt) state.firstTokenAt = performance.now();
           var b = state.openBlocks[chunk.index] || (state.openBlocks[chunk.index] = { type: chunk.type === "reasoning-delta" ? "reasoning" : "text", text: "" });
           if (chunk.text) b.text += chunk.text;
           syncAssistantFromBlocks();
+          if (state.curAssistant) state.curAssistant.version = (state.curAssistant.version || 0) + 1;
         }
         break;
       }
@@ -408,14 +506,22 @@
         state.curAssistant.blocks = contentBlocks(d.message);
         state.curAssistant.done = true;
         state.curAssistant.streaming = false;
+        state.curAssistant.version = (state.curAssistant.version || 0) + 1;
         state.curAssistant = null;
         state.openBlocks = [];
+        state.activeRound = null;
         break;
       }
-      case "tool/call":
-        state.items.push({ kind: "tool", callId: d.callId, name: d.name || "tool",
-                           argsText: prettyArgs(d.arguments), status: "running", resultText: "" });
+      case "tool/call": {
+        var callId = String(d.callId || "");
+        state.activeRound = { kind: "tool", callId: callId };
+        state.items.push({ kind: "tool", callId: callId, name: d.name || "tool",
+                           argsText: prettyArgs(d.arguments), status: "running", resultText: "",
+                           turn: typeof d.turn === "number" ? d.turn : state.lastTurn,
+                           startedPerf: performance.now(),
+                           diff: state.diffByCall[callId] || null });
         break;
+      }
       case "tool/result": {
         var msg = d.message || {};
         var block = null;
@@ -425,13 +531,46 @@
         if (tool) {
           tool.status = block && block.isError ? "error" : "ok";
           tool.resultText = summarizeResult(block && block.content);
+          tool.version = (tool.version || 0) + 1;
+        }
+        if (state.activeRound && state.activeRound.kind === "tool" && state.activeRound.callId === String(callId)) {
+          state.activeRound = null;
         }
         break;
       }
       case "turn/end": {
         finalizeStream();
+        state.activeRound = null;
+        // Safety net: if a tool/result failed to match (callId type drift) the
+        // card would stay "running" with a live timer forever — close every
+        // still-running tool the moment the turn ends.
+        for (var ri = state.items.length - 1; ri >= 0; ri--) {
+          var rit = state.items[ri];
+          if (rit.kind === "tool" && rit.status === "running") {
+            rit.status = "ok";
+            rit.version = (rit.version || 0) + 1;
+          }
+        }
+        // New turn boundary: always visible, even if the view was frozen while
+        // the user was reading history.
+        if (suspended) { suspended = false; forceBottom = true; }
+        var endTurn = null;
         for (var i = state.items.length - 1; i >= 0; i--) {
-          if (state.items[i].kind === "turn") { state.items[i].done = true; break; }
+          var turnItem = state.items[i];
+          if (turnItem.kind === "turn") {
+            turnItem.done = true;
+            turnItem.endTime = typeof ev.time === "number" ? ev.time : Date.now();
+            turnItem.elapsed = turnItem.startTime ? Math.max(0, turnItem.endTime - turnItem.startTime) : undefined;
+            turnItem.totalDiff = aggregateTurnDiff(state.items, turnItem.turn);
+            turnItem.version = (turnItem.version || 0) + 1;
+            endTurn = { turn: turnItem.turn, elapsed: turnItem.elapsed, totalDiff: turnItem.totalDiff };
+            break;
+          }
+        }
+        // Bottom-of-turn summary strip: appears the moment the turn ends, so
+        // the totals are right under the newest message (no scrolling up).
+        if (endTurn) {
+          state.items.push({ kind: "turn-end", turn: endTurn.turn, elapsed: endTurn.elapsed, totalDiff: endTurn.totalDiff });
         }
         break;
       }
@@ -442,7 +581,90 @@
     scheduleRender();
   }
 
-  /* ---------- rendering (rAF-throttled full rebuild) ---------- */
+  /** Map a page of older (already-complete) log events into read-only items
+   *  for the infinite-scroll prepend. Old history contains whole messages
+   *  (user/message, assistant/message, tool/call+result, turn markers), not
+   *  streaming chunks, so a direct mapping is safe and cheap. */
+  function olderItemsFrom(events) {
+    var out = [];
+    var curTool = null;
+    events.forEach(function (ev) {
+      if (!ev) return;
+      var d = ev.data || {};
+      switch (ev.type) {
+        case "turn/start": {
+          var tnum = typeof d.turn === "number" ? d.turn : out.length;
+          // If this turn's end strip was already loaded (newer page came
+          // first), mark it done right away instead of showing "进行中".
+          var preDone = null;
+          for (var pi = state.items.length - 1; pi >= 0; pi--) {
+            var pit = state.items[pi];
+            if (pit.kind === "turn-end" && pit.turn === tnum) { preDone = pit; break; }
+          }
+          out.push({ kind: "turn", turn: tnum, done: !!preDone,
+                     startTime: typeof ev.time === "number" ? ev.time : 0,
+                     elapsed: preDone ? preDone.elapsed : undefined });
+          break;
+        }
+        case "turn/end": {
+          var doneTurn = null;
+          for (var i = out.length - 1; i >= 0; i--) {
+            var t = out[i];
+            if (t.kind === "turn" && !t.done) {
+              t.done = true;
+              t.endTime = typeof ev.time === "number" ? ev.time : 0;
+              if (t.startTime) t.elapsed = Math.max(0, t.endTime - t.startTime);
+              var total = aggregateTurnDiff(out, t.turn);
+              t.totalDiff = total;
+              doneTurn = { turn: t.turn, elapsed: t.elapsed, totalDiff: total };
+              break;
+            }
+          }
+          if (doneTurn) {
+            out.push({ kind: "turn-end", turn: doneTurn.turn, elapsed: doneTurn.elapsed, totalDiff: doneTurn.totalDiff });
+          }
+          break;
+        }
+        case "user/message": {
+          var msg = d.message || d;
+          var u = textBlocksOf(msg);
+          if (u) out.push({ kind: "user", text: u, turn: d.turn });
+          break;
+        }
+        case "assistant/message": {
+          var blocks = contentBlocks(d.message);
+          if (blocks.length) out.push({ kind: "assistant", blocks: blocks, done: true, streaming: false });
+          break;
+        }
+        case "tool/call":
+          curTool = { kind: "tool", callId: String(d.callId || ""), name: d.name || "tool",
+                      argsText: prettyArgs(d.arguments), status: "ok", resultText: "",
+                      turn: typeof d.turn === "number" ? d.turn : 0,
+                      diff: state.diffByCall[String(d.callId || "")] || null };
+          out.push(curTool);
+          break;
+        case "tool/result": {
+          if (!curTool) break;
+          var m = d.message || {};
+          var block = null;
+          (m.content || []).forEach(function (b) { if (b && b.type === "tool-result") block = b; });
+          curTool.status = block && block.isError ? "error" : "ok";
+          curTool.resultText = summarizeResult(block && block.content);
+          curTool = null;
+          break;
+        }
+      }
+    });
+    return out;
+  }
+
+  /* ---------- rendering (incremental key-based sync) ----------
+     A rAF-throttled FULL innerHTML rebuild every frame was the root cause of
+     the streaming "思考" fold being un-clickable: the element under the
+     pointer was destroyed and recreated constantly, so hover flickered and
+     click (mousedown+mouseup must land on the SAME node) never fired. Now the
+     list is synced per key: an unchanged message keeps its exact DOM nodes,
+     and only the streaming message's text containers are refreshed. */
   var dirty = false, forceBottom = true, suspended = false;
   function scheduleRender() {
     // While the user is reading history mid-turn the DOM is frozen; events
@@ -462,6 +684,20 @@
       scheduleRender();
     }
   });
+  // Infinite scroll: when the user scrolls up near the top, fetch the next
+  // older page (host: session.history with beforeSeq = oldest loaded seq).
+  if (sentinelEl && "IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (!en.isIntersecting) return;
+        if (state.loadingOlder || !state.hasMore) return;
+        if (!state.activeSessionId) return;
+        state.loadingOlder = true;
+        post({ type: "loadOlder", beforeSeq: state.oldestSeq });
+      });
+    }, { root: messagesEl, rootMargin: "120px 0px 0px 0px" });
+    io.observe(sentinelEl);
+  }
   function render() {
     dirty = false;
     var stick = forceBottom || scrollPos();
@@ -469,30 +705,38 @@
     if (!stick && state.running) { suspended = true; return; }
     var prevTop = messagesEl.scrollTop;
     var prevHeight = messagesEl.scrollHeight;
-    var frag = document.createDocumentFragment();
 
     if (!state.connected) {
+      messagesEl.innerHTML = "";
       if (state.phase === "offline") {
         var od = emptyDiv("harness 未连接。<br>状态栏点击「DSH」或命令面板运行「DSH: Start Web Harness」。");
         od.className = "empty offline";
-        frag.appendChild(od);
+        messagesEl.appendChild(od);
       } else {
         // searching / starting — the harness is being located or booted.
         var ld = document.createElement("div");
         ld.className = "loading";
         ld.innerHTML = "<img class='whale' src='__WHALE_URI__' alt=''>" +
           "<span class='loading-text'>DSH 加载中</span>";
-        frag.appendChild(ld);
+        messagesEl.appendChild(ld);
       }
     } else if (state.items.length === 0) {
-      frag.appendChild(emptyDiv("没有消息。<br>输入框发消息即可开始（会自动创建会话）。"));
+      messagesEl.innerHTML = "";
+      messagesEl.appendChild(emptyDiv("没有消息。<br>输入框发消息即可开始（会自动创建会话）。"));
+    } else {
+      // A single failure must not stall the whole panel (it has, twice).
+      try { syncItems(); } catch (e) {}
     }
-
-    for (var i = 0; i < state.items.length; i++) {
-      frag.appendChild(renderItem(state.items[i]));
+    // Re-attach the history sentinel at the very top (list sync wipes children).
+    // Hide it when no more history is available so it never re-triggers.
+    if (sentinelEl) {
+      sentinelEl.style.display = state.connected && state.hasMore ? "block" : "none";
+      if (messagesEl.firstChild !== sentinelEl) messagesEl.insertBefore(sentinelEl, messagesEl.firstChild);
     }
-    messagesEl.innerHTML = "";
-    messagesEl.appendChild(frag);
+    // Pop animations replay only on the first render after a count change.
+    for (var pi = 0; pi < state.items.length; pi++) {
+      if (state.items[pi].diffPop) state.items[pi].diffPop = false;
+    }
     if (stick) {
       messagesEl.scrollTop = messagesEl.scrollHeight;
     } else {
@@ -502,14 +746,535 @@
     }
     updateStatusLine();
   }
+  /** Short human-friendly path: keep the tail of the path (the leading parts
+   *  are usually identical noise), ellipsize an overly long basename. */
+  function shortPath(p) {
+    var s = String(p).replace(/\\/g, "/");
+    var segs = s.split("/").filter(Boolean);
+    if (segs.length === 0) return s;
+    var last = segs[segs.length - 1];
+    if (last.length > 48) last = last.slice(0, 18) + "…" + last.slice(-16);
+    if (segs.length <= 2) return segs.join("/");
+    return "…/" + segs.slice(-2).join("/");
+  }
+  /** One-line summary of a tool call for its fold row ("⚙ name : <what>"). */
+  function toolSummaryText(item) {
+    var a = null;
+    if (item.argsText) { try { a = JSON.parse(item.argsText); } catch (e) { a = null; } }
+    if (!a || typeof a !== "object") return "";
+    // Files: read/edit/write carry file_path; editors/fs tools carry path —
+    // show the tail of the path (leading segments are identical noise).
+    var p = a.file_path || a.path || a.file || a.filePath || a.uri || a.filename;
+    if (typeof p === "string" && p) return shortPath(p);
+    var cmd = a.command;
+    if (typeof cmd === "string" && cmd) return cmd.replace(/\s+/g, " ").trim().slice(0, 80);
+    var pat = a.pattern;
+    if (typeof pat === "string" && pat) return pat.slice(0, 60);
+    if (Array.isArray(a.queries) && typeof a.queries[0] === "string") return a.queries[0].slice(0, 60);
+    var q = a.query;
+    if (typeof q === "string" && q) return q.slice(0, 60);
+    var nm = a.name;
+    if (typeof nm === "string" && nm) return nm.slice(0, 60);
+    return "";
+  }
+  /** Consecutive tool calls live inside one foldable group (bundled internal
+   *  actions); the group and every tool inside it open only on click. */
+  function createGroupEl() {
+    var g = document.createElement("details");
+    g.className = "tool-group";
+    var s = document.createElement("summary");
+    var t = document.createElement("span");
+    t.className = "g-title";
+    s.appendChild(t);
+    g.appendChild(s);
+    var body = document.createElement("div");
+    body.className = "g-body";
+    g.appendChild(body);
+    return g;
+  }
+  function updateGroupTitle(g) {
+    var t = g.querySelector(".g-title");
+    if (!t) return;
+    var cards = g.querySelectorAll("[data-key]");
+    var n = cards.length;
+    // The folded group shows the LATEST action's description ("⚙ 动作 · 3 ·
+    // edit : …/demo.txt") so you can see what is currently running without
+    // opening the bundle; the inner rows keep every action's own summary.
+    var label = "";
+    if (n > 0) {
+      var nm = cards[n - 1].querySelector(".tname");
+      if (nm) label = nm.textContent.replace(/^⚙\s*/, "");
+    }
+    t.textContent = "⚙ 动作 · " + n + (label ? " · " + label : "");
+  }
+  /** Key-based sync: keep every unchanged item's DOM node; only items whose
+   *  version moved get re-rendered (assistant/tool get partial updates). Stable
+   *  nodes never blink or vanish, so hover + click keep working mid-stream. */
+  function syncItems() {
+    if (sentinelEl && sentinelEl.parentNode !== messagesEl) {
+      messagesEl.insertBefore(sentinelEl, messagesEl.firstChild);
+    }
+    // Drop non-keyed leftovers (empty states, old sentinel positions) so the
+    // insert order below stays exact.
+    for (var c = messagesEl.firstChild; c; ) {
+      var nx = c.nextSibling;
+      if (c === sentinelEl) { c = nx; continue; }
+      if (!(c.nodeType === 1 && c.dataset && c.dataset.key)) messagesEl.removeChild(c);
+      c = nx;
+    }
+    var byKey = {};
+    for (var c2 = messagesEl.firstChild; c2; ) {
+      var nx2 = c2.nextSibling;
+      if (c2 !== sentinelEl && c2.nodeType === 1 && c2.dataset && c2.dataset.key) byKey[c2.dataset.key] = c2;
+      // Tool cards live INSIDE their group container, so they are not direct
+      // children of the list — collect them too (keyed by their data-key on
+      // the wrapper node), or every render would build a fresh card and leave
+      // the old (ticking) one behind forever. NOTE: must query [data-key],
+      // not .tool — renderItem wraps <details class="tool"> in a keyed div.
+      if (c2.nodeType === 1 && c2.classList && c2.classList.contains("tool-group")) {
+        var gKids = c2.querySelectorAll("[data-key]");
+        for (var gt = 0; gt < gKids.length; gt++) {
+          var gk = gKids[gt].getAttribute("data-key");
+          if (!gk) continue;
+          // Dedupe: older sessions may have accumulated duplicate cards; keep
+          // only the first and drop the rest right here.
+          if (byKey[gk]) {
+            if (gKids[gt].parentNode) gKids[gt].parentNode.removeChild(gKids[gt]);
+          } else {
+            byKey[gk] = gKids[gt];
+          }
+        }
+      }
+      c2 = nx2;
+    }
+    var pos = sentinelEl ? sentinelEl.nextSibling : messagesEl.firstChild;
+    // Frozen history: everything before the last turn-end is finished — those
+    // items keep their rendered DOM and are never re-synced (prevents the
+    // render loop from ever touching past turns again).
+    var frozenEnd = -1;
+    for (var fi = 0; fi < state.items.length; fi++) {
+      if (state.items[fi].kind === "turn-end") frozenEnd = fi;
+    }
+    // Build a display plan: all tool calls of the SAME turn bundle into one
+    // group. "As long as the next execution is still an action it joins the
+    // group" — thinking/reasoning messages between the calls do NOT split it.
+    var plan = [];
+    var curGroup = null;
+    for (var i = 0; i < state.items.length; i++) {
+      var it = state.items[i];
+      if (!it.id) it.id = state.nextItemId++;
+      var frozen = i <= frozenEnd;
+      if (it.kind === "tool") {
+        var gk = "gt" + String(it.turn);
+        if (!curGroup || curGroup.key !== gk) {
+          curGroup = { kind: "group", key: gk, tools: [it], frozen: frozen };
+          plan.push(curGroup);
+        } else {
+          curGroup.tools.push(it);
+        }
+      } else {
+        curGroup = null;
+        plan.push({ kind: it.kind, key: String(it.id), item: it, frozen: frozen });
+      }
+    }
+    var handledGroups = {};
+    var placedGroups = {};
+    for (var pi = 0; pi < plan.length; pi++) {
+      var p = plan[pi];
+      try {
+      if (p.kind === "group") {
+        // One container per turn key. The same turn can appear in several
+        // plan entries (interleaved thinking messages) — the container is
+        // created once and POSITIONED once per render (at the FIRST entry for
+        // this key); later entries share it in place. Never delete the key
+        // from byKey mid-pass, or duplicate empty groups pile up.
+        var gEl = byKey[p.key] || handledGroups[p.key] || null;
+        if (gEl) {
+          delete byKey[p.key];
+        } else {
+          gEl = createGroupEl();
+          gEl.dataset.key = p.key;
+        }
+        handledGroups[p.key] = gEl;
+        if (!placedGroups[p.key]) {
+          placedGroups[p.key] = true;
+          if (pos === gEl) { pos = gEl.nextSibling; }
+          else { messagesEl.insertBefore(gEl, pos); pos = gEl.nextSibling; }
+        }
+        var gBody = gEl.querySelector(".g-body");
+        for (var ti = 0; ti < p.tools.length; ti++) {
+          var tit = p.tools[ti];
+          var tkey = String(tit.id);
+          var tver = String(tit.version || 0);
+          var tel = byKey[tkey] || null;
+          if (tel) {
+            delete byKey[tkey];
+            if (!p.frozen && tel.dataset.ver !== tver) { syncToolEl(tit, tel); tel.dataset.ver = tver; }
+          } else {
+            tel = renderItem(tit);
+            tel.dataset.ver = tver;
+            // New card: append at the group's end (order = plan order).
+            // Reused cards keep their existing position.
+            gBody.appendChild(tel);
+          }
+        }
+        updateGroupTitle(gEl);
+      } else {
+        var it2 = p.item;
+        var ver2 = String(it2.version || 0);
+        var el = byKey[p.key] || null;
+        if (el) {
+          delete byKey[p.key];
+          if (!p.frozen && el.dataset.ver !== ver2) {
+            if (it2.kind === "assistant") syncAssistantEl(it2, el);
+            else {
+              var ne = renderItem(it2);
+              el.parentNode.replaceChild(ne, el);
+              // The insertion cursor must not keep pointing at the removed node:
+              // insertBefore(refChild) would throw NotFoundError and kill the
+              // whole render (which is exactly what broke turn-end/cancel UI).
+              if (pos === el) pos = ne;
+              el = ne;
+            }
+            el.dataset.ver = ver2;
+          }
+        } else {
+          el = renderItem(it2);
+          el.dataset.ver = ver2;
+        }
+        if (pos === el) {
+          pos = el.nextSibling;
+        } else {
+          messagesEl.insertBefore(el, pos);
+          pos = el.nextSibling;
+        }
+      }
+      } catch (e) {
+        // One bad plan item must not take down the rest of the render.
+      }
+    }
+    for (var k in byKey) {
+      var stale = byKey[k];
+      if (stale.parentNode) stale.parentNode.removeChild(stale);
+    }
+  }
+  /** Partial assistant update — strictly in place: every block node that
+   *  already exists is REUSED at its original position (insertBefore to the
+   *  same slot is a no-op, never a detach), so a reasoning box under the
+   *  cursor keeps its :hover state and a mousedown+mouseup on it always
+   *  completes a click, even while the reply streams. Only text containers
+   *  are rewritten; nothing is ever detached/re-attached. */
+  function syncAssistantEl(item, el) {
+    var byKey = {};
+    for (var c = el.firstChild; c; ) {
+      var nxc = c.nextSibling;
+      if (c.nodeType === 1 && c.classList &&
+          (c.classList.contains("reasoning") || c.classList.contains("body"))) {
+        var k = c.classList.contains("reasoning")
+          ? "r" + c.getAttribute("data-ri") : "b" + c.getAttribute("data-bidx");
+        if (byKey[k]) { el.removeChild(c); } else { byKey[k] = c; }
+        c = nxc;
+        continue;
+      }
+      // live-timer / msg-actions: rebuilt at the end
+      el.removeChild(c);
+      c = nxc;
+    }
+    // Expected block sequence (order is stable while streaming: reasoning
+    // blocks come first, text after — same ordinals as when they were built).
+    var riSeq = 0, bidx = 0;
+    var want = [];
+    item.blocks.forEach(function (b) {
+      if (b.type === "reasoning") {
+        var mySeq = riSeq++;
+        want.push({ kind: "reasoning", key: "r" + mySeq,
+                    open: !!(item.reasoningOpen && item.reasoningOpen[mySeq]), text: b.text });
+      } else {
+        want.push({ kind: "body", key: "b" + (bidx++), text: b.text });
+      }
+    });
+    if (item.blocks.length === 0 && item.streaming) {
+      want.push({ kind: "body", key: "b0", text: "" });
+    }
+    var prev = null;
+    want.forEach(function (w) {
+      var node = byKey[w.key];
+      if (!node) {
+        node = document.createElement("div");
+        if (w.kind === "reasoning") {
+          node.className = "reasoning";
+          node.setAttribute("data-ri", w.key.slice(1));
+          var h2 = document.createElement("div");
+          h2.className = "reasoning-head";
+          h2.setAttribute("data-ri", w.key.slice(1));
+          h2.textContent = (w.open ? "▾" : "▸") + " 思考";
+          var b2 = document.createElement("div");
+          b2.className = "reasoning-body";
+          if (!w.open) b2.hidden = true;
+          var p2 = document.createElement("pre");
+          p2.textContent = w.text;
+          b2.appendChild(p2);
+          node.appendChild(h2);
+          node.appendChild(b2);
+        } else {
+          node.className = "body";
+          node.setAttribute("data-bidx", w.key.slice(1));
+          node.innerHTML = renderText(w.text);
+          if (item.streaming) node.appendChild(cursorSpan());
+        }
+      } else {
+        delete byKey[w.key];
+        if (w.kind === "reasoning") {
+          var head = node.querySelector(".reasoning-head");
+          var body = node.querySelector(".reasoning-body");
+          var pre = body ? body.querySelector("pre") : null;
+          var wantHead = (w.open ? "▾" : "▸") + " 思考";
+          if (head && head.textContent !== wantHead) head.textContent = wantHead;
+          if (body && body.hidden !== !w.open) body.hidden = !w.open;
+          if (pre && pre.textContent !== w.text) pre.textContent = w.text;
+        } else {
+          node.innerHTML = renderText(w.text);
+          var sc = node.querySelector(".stream-cursor");
+          if (item.streaming) { if (!sc) node.appendChild(cursorSpan()); }
+          else if (sc) sc.remove();
+        }
+      }
+      // Order it after the previous block; skip when already in position so
+      // the DOM is never touched (no detach, no reinsert, no edge cases).
+      var ref = prev ? prev.nextSibling : el.firstChild;
+      if (ref !== node && node.nextSibling !== ref) el.insertBefore(node, ref);
+      prev = node;
+    });
+    // Blocks that vanished from the item.
+    for (var k in byKey) {
+      if (byKey[k].parentNode) byKey[k].parentNode.removeChild(byKey[k]);
+    }
+    // Live timer: add once while this is the streaming round, drop otherwise.
+    var ltx = el.querySelector(".live-timer");
+    if (item.streaming && state.activeRound && state.activeRound.kind === "assistant") {
+      if (!ltx) {
+        var lt = document.createElement("span");
+        lt.className = "live-timer";
+        lt.dataset.start = String(item.startPerf || 0);
+        lt.textContent = item.startPerf ? fmtLive(performance.now() - item.startPerf) : fmtLive(0);
+        el.appendChild(lt);
+      }
+    } else if (ltx) {
+      ltx.remove();
+    }
+    // Copy action once the reply is complete.
+    var ax = el.querySelector(".msg-actions");
+    if (!item.streaming && !ax) {
+      var aa = document.createElement("div");
+      aa.className = "msg-actions";
+      var acp = document.createElement("button");
+      acp.textContent = "⧉ 复制";
+      acp.onclick = function () {
+        var all = item.blocks.filter(function (b) { return b.type === "text"; }).map(function (b) { return b.text; }).join("\n");
+        post({ type: "copyText", text: all });
+      };
+      aa.appendChild(acp);
+      el.appendChild(aa);
+    } else if (item.streaming && ax) {
+      ax.remove();
+    }
+  }
+  function cursorSpan() {
+    var s = document.createElement("span");
+    s.className = "stream-cursor";
+    return s;
+  }
+  /** Partial tool update: refresh the summary row (status dot, "+N-M", live
+   *  timer) and the args/result blocks in place — the card element itself is
+   *  reused so a running tool never flickers under the cursor. */
+  function syncToolEl(item, el) {
+    var det = el.querySelector("details.tool");
+    if (!det) { var ne = renderItem(item); el.parentNode.replaceChild(ne, el); return; }
+    var sum = det.querySelector("summary");
+    if (!sum) { var ne2 = renderItem(item); el.parentNode.replaceChild(ne2, el); return; }
+    var dot = sum.querySelector(".dot");
+    if (dot) dot.className = "dot " + (item.status === "running" ? "run" : item.status === "error" ? "err" : "ok");
+    var tn = sum.querySelector(".tname");
+    if (tn) {
+      var tsum = toolSummaryText(item);
+      tn.setAttribute("data-name", item.name);
+      tn.textContent = "⚙ " + item.name + (tsum ? " : " + tsum : "");
+    }
+    var oldC = sum.querySelectorAll(".diff-chip");
+    for (var i = 0; i < oldC.length; i++) oldC[i].remove();
+    if (item.diff && (item.diff.added || item.diff.deleted)) sum.appendChild(diffChipEl(item.diff, item.diffPop));
+    var oldT = sum.querySelectorAll(".live-timer");
+    for (var j = 0; j < oldT.length; j++) oldT[j].remove();
+    if (item.status === "running" && state.activeRound && state.activeRound.kind === "tool" && state.activeRound.callId === item.callId) {
+      var tlt = document.createElement("span");
+      tlt.className = "live-timer";
+      tlt.dataset.start = String(item.startedPerf || 0);
+      tlt.textContent = fmtLive(0);
+      sum.appendChild(tlt);
+    }
+    // Never auto-open: only the user's own click expands a tool card.
+    var oldB = det.querySelectorAll(".targs");
+    for (var b = 0; b < oldB.length; b++) oldB[b].remove();
+    if (item.argsText) det.appendChild(toolBlock("参数", item.argsText));
+    if (item.resultText) det.appendChild(toolBlock("结果", item.resultText));
+  }
+  function toolBlock(label, text) {
+    var w = document.createElement("div");
+    w.className = "targs";
+    var lab = document.createElement("div");
+    lab.className = "tlabel";
+    lab.textContent = label;
+    var pre = document.createElement("pre");
+    pre.textContent = text;
+    var cp = document.createElement("button");
+    cp.className = "block-copy";
+    cp.textContent = "⧉ 复制";
+    cp.title = "复制 " + label;
+    cp.onclick = function () { post({ type: "copyText", text: text }); };
+    w.appendChild(lab);
+    w.appendChild(pre);
+    w.appendChild(cp);
+    return w;
+  }
   function emptyDiv(html) { var d = document.createElement("div"); d.className = "empty"; d.innerHTML = html; return d; }
+
+  /* ---------- bridge metrics: diff chips + live timers ---------- */
+  function diffChipHtml(d, pop) {
+    if (!d || (d.added === 0 && d.deleted === 0)) return "";
+    return "<span class='diff-chip" + (pop ? " pop" : "") + "'>" +
+      "<span class='da'>+" + d.added + "</span><span class='dd'>-" + d.deleted + "</span></span>";
+  }
+  function diffChipEl(d, pop) {
+    var w = document.createElement("span");
+    w.className = "diff-chip" + (pop ? " pop" : "");
+    var a = document.createElement("span");
+    a.className = "da";
+    a.textContent = "+" + d.added;
+    var del = document.createElement("span");
+    del.className = "dd";
+    del.textContent = "-" + d.deleted;
+    w.appendChild(a);
+    w.appendChild(del);
+    return w;
+  }
+  // Live format: 12.3s under a minute, 1m23s from there on.
+  function fmtLive(ms) {
+    var s = Math.max(0, ms) / 1000;
+    if (s < 60) return (Math.round(s * 10) / 10) + "s";
+    var whole = Math.floor(s);
+    var sec = whole % 60;
+    return Math.floor(whole / 60) + "m" + (sec < 10 ? "0" : "") + sec + "s";
+  }
+  /** Accumulated "+N-M" of the current turn's tool calls (live, jumps as each lands). */
+  function turnDiffLive() {
+    var a = 0, d = 0;
+    for (var i = 0; i < state.items.length; i++) {
+      var it = state.items[i];
+      if (it.kind === "tool" && it.turn === state.lastTurn && it.diff) {
+        a += it.diff.added;
+        d += it.diff.deleted;
+      }
+    }
+    return (a || d) ? { added: a, deleted: d } : null;
+  }
+  /** Aggregate one turn's tool diffs into totals + per-file breakdown. */
+  function aggregateTurnDiff(items, turn) {
+    var total = { added: 0, deleted: 0, files: [] };
+    var byPath = {};
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (it.kind === "tool" && it.turn === turn && it.diff) {
+        total.added += it.diff.added;
+        total.deleted += it.diff.deleted;
+        var p = it.diff.path || "(未知文件)";
+        if (!byPath[p]) byPath[p] = { path: p, added: 0, deleted: 0 };
+        byPath[p].added += it.diff.added;
+        byPath[p].deleted += it.diff.deleted;
+      }
+    }
+    for (var k in byPath) total.files.push(byPath[k]);
+    total.files.sort(function (a, b) { return (b.added + b.deleted) - (a.added + a.deleted); });
+    return total;
+  }
+  /** Rebuild-free tick: only the currently rendered live timers move. */
+  function tickLive() {
+    var now = performance.now();
+    if (!state.running) {
+      // Turn is over: no live timer may remain anywhere. Safety net for any
+      // render path that failed to remove one — the tick wipes them directly
+      // so a stale "counting" timer can never survive past the turn.
+      var rem = messagesEl.querySelectorAll(".live-timer");
+      for (var ri2 = 0; ri2 < rem.length; ri2++) rem[ri2].remove();
+      return;
+    }
+    var els = messagesEl.querySelectorAll(".live-timer");
+    for (var i = 0; i < els.length; i++) {
+      var st = parseFloat(els[i].getAttribute("data-start") || "0");
+      if (st > 0) els[i].textContent = fmtLive(now - st);
+    }
+    if (state.running && state.turnStartPerf) {
+      var seg = document.getElementById("live-status");
+      var sst = seg ? parseFloat(seg.getAttribute("data-start") || "0") : 0;
+      if (seg && sst > 0) seg.textContent = fmtLive(now - sst);
+    }
+  }
+  setInterval(tickLive, 250);
 
   function renderItem(item) {
     var el = document.createElement("div");
+    if (!item.id) item.id = state.nextItemId++;
+    el.dataset.key = String(item.id);
     switch (item.kind) {
       case "turn": {
         el.className = "turn-sep";
-        el.innerHTML = "<span>— 第 " + item.turn + " 轮" + (item.done ? "" : " · 进行中") + " —</span>";
+        // Totals of a finished turn live on the bottom summary strip
+        // (kind "turn-end"), not here — so the newest content shows them
+        // without scrolling back up. The running turn keeps the live clock
+        // and the accumulated "+N-M" so far.
+        var label = "— 第 " + item.turn + " 轮";
+        if (!item.done) {
+          label += " · 进行中";
+          if (item.startPerf) {
+            // Seed the live timer with its real elapsed: streaming rebuilds
+            // recreate the element constantly, so a hard-coded "0.0s" would
+            // keep flashing back to zero instead of counting up.
+            label += "<span class='live-timer' data-start='" + item.startPerf + "'>" + fmtLive(performance.now() - item.startPerf) + "</span>";
+          }
+          var ltd = aggregateTurnDiff(state.items, item.turn);
+          if (ltd && (ltd.added || ltd.deleted)) label += " · " + diffChipHtml(ltd);
+        }
+        el.innerHTML = "<span>" + label + " —</span>";
+        break;
+      }
+      case "turn-end": {
+        el.className = "turn-summary";
+        var dur = (typeof item.elapsed === "number" && isFinite(item.elapsed)) ? fmtDur(item.elapsed) : "--";
+        var s = "<span class='check'>✓</span><span>第 " + item.turn + " 轮完成 · 用时 " + dur + "</span>";
+        var td = item.totalDiff;
+        if (td && (td.added || td.deleted)) {
+          s += diffChipHtml(td);
+        }
+        el.innerHTML = s;
+        if (td && td.files && td.files.length) {
+          var det = document.createElement("details");
+          det.className = "turn-diff";
+          var dsum = document.createElement("summary");
+          dsum.textContent = "文件改动明细";
+          det.appendChild(dsum);
+          td.files.forEach(function (f) {
+            var row = document.createElement("div");
+            row.className = "td-file";
+            var nm = document.createElement("span");
+            nm.className = "td-path";
+            nm.textContent = f.path;
+            nm.title = "点击在 VS Code 中打开";
+            row.appendChild(nm);
+            row.appendChild(diffChipEl(f, false));
+            row.onclick = (function (p) { return function () { post({ type: "openFile", path: p }); }; })(f.path);
+            det.appendChild(row);
+          });
+          el.appendChild(det);
+        }
         break;
       }
       case "user": {
@@ -569,15 +1334,36 @@
       case "assistant": {
         el.className = "msg assistant";
         var html = "";
-        item.blocks.forEach(function (b) {
+        // Fold state is keyed by the reasoning block's stable ordinal (the
+        // Nth "思考"), NOT the blocks-array index — streaming rebuilds can
+        // reorder/shift block indices, which previously lost the state on the
+        // third toggle. Collapsed by default; every click is honored.
+        var riSeq = 0, bidx = 0;
+        item.blocks.forEach(function (b, bi) {
           if (b.type === "reasoning") {
-            html += "<details class='reasoning'><summary>思考</summary><pre>" + esc(b.text) + "</pre></details>";
+            var mySeq = riSeq++;
+            var rOpen = !!(item.reasoningOpen && item.reasoningOpen[mySeq]);
+            html += "<div class='reasoning' data-ri='" + mySeq + "'><div class='reasoning-head' data-ri='" + mySeq + "'>" +
+                    (rOpen ? "▾" : "▸") + " 思考</div>" +
+                    "<div class='reasoning-body'" + (rOpen ? "" : " hidden") + "><pre>" + esc(b.text) + "</pre></div></div>";
           } else {
-            html += "<div class='body'>" + renderText(b.text) + (item.streaming ? "<span class='stream-cursor'></span>" : "") + "</div>";
+            html += "<div class='body' data-bidx='" + bidx + "'>" + renderText(b.text) + (item.streaming ? "<span class='stream-cursor'></span>" : "") + "</div>";
+            bidx++;
           }
         });
         if (item.blocks.length === 0 && item.streaming) html = "<div class='body'><span class='stream-cursor'></span></div>";
         el.innerHTML = html;
+        // Live timer for the assistant's reply round (only while it is the
+        // newest round; gone as soon as the message completes). Seeded with
+        // the real elapsed so dense streaming rebuilds never flash it back
+        // to "0.0s".
+        if (item.streaming && state.activeRound && state.activeRound.kind === "assistant") {
+          var lt = document.createElement("span");
+          lt.className = "live-timer";
+          lt.dataset.start = String(item.startPerf || 0);
+          lt.textContent = item.startPerf ? fmtLive(performance.now() - item.startPerf) : fmtLive(0);
+          el.appendChild(lt);
+        }
         if (!item.streaming) {
           var aa = document.createElement("div");
           aa.className = "msg-actions";
@@ -593,41 +1379,39 @@
         break;
       }
       case "tool": {
-        // Collapsible tool call — summary row shows status + name, the
-        // details (args / result) live under the fold (mirrors web GUI).
+        // Collapsible tool call — collapsed by default (the user opens it by
+        // clicking); summary row shows status + "⚙ name : <summary>". The
+        // bundle (tool-group) wraps consecutive tool calls.
         var det = document.createElement("details");
         det.className = "tool";
-        if (item.status === "running") det.open = true;
         var dot = item.status === "running" ? "run" : item.status === "error" ? "err" : "ok";
         var sum = document.createElement("summary");
         var d = document.createElement("span");
         d.className = "dot " + dot;
         var nm = document.createElement("span");
         nm.className = "tname";
-        nm.textContent = item.name;
+        var tsum = toolSummaryText(item);
+        nm.setAttribute("data-name", item.name);
+        nm.textContent = "⚙ " + item.name + (tsum ? " : " + tsum : "");
         sum.appendChild(d);
         sum.appendChild(nm);
+        // "+N-M" line counts — on the fold row, so they stay visible while
+        // the card is collapsed; pops when the count changes live.
+        if (item.diff && (item.diff.added || item.diff.deleted)) {
+          sum.appendChild(diffChipEl(item.diff, item.diffPop));
+        }
+        // Live timer while this tool call is the running round (only the
+        // newest one; removed once the result lands).
+        if (item.status === "running" && state.activeRound && state.activeRound.kind === "tool" && state.activeRound.callId === item.callId) {
+          var tlt = document.createElement("span");
+          tlt.className = "live-timer";
+          tlt.dataset.start = String(item.startedPerf || 0);
+          tlt.textContent = fmtLive(0);
+          sum.appendChild(tlt);
+        }
         det.appendChild(sum);
-        var mkBlock = function (label, text) {
-          var w = document.createElement("div");
-          w.className = "targs";
-          var lab = document.createElement("div");
-          lab.className = "tlabel";
-          lab.textContent = label;
-          var pre = document.createElement("pre");
-          pre.textContent = text;
-          var cp = document.createElement("button");
-          cp.className = "block-copy";
-          cp.textContent = "⧉ 复制";
-          cp.title = "复制 " + label;
-          cp.onclick = function () { post({ type: "copyText", text: text }); };
-          w.appendChild(lab);
-          w.appendChild(pre);
-          w.appendChild(cp);
-          return w;
-        };
-        if (item.argsText) det.appendChild(mkBlock("参数", item.argsText));
-        if (item.resultText) det.appendChild(mkBlock("结果", item.resultText));
+        if (item.argsText) det.appendChild(toolBlock("参数", item.argsText));
+        if (item.resultText) det.appendChild(toolBlock("结果", item.resultText));
         el.appendChild(det);
         break;
       }
@@ -647,6 +1431,35 @@
     }
     return el;
   }
+
+  /* ---------- reasoning fold: plain div pair (no <details>), one delegated
+     click handler. Fold state is keyed by the reasoning ordinal, so it
+     survives the in-place streaming updates below. ---------- */
+  messagesEl.addEventListener("click", function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var head = t.closest(".reasoning-head");
+    if (!head) return;
+    var box = head.closest(".reasoning");
+    if (!box) return;
+    var body = box.querySelector(".reasoning-body");
+    if (!body) return;
+    var host = box.closest(".msg.assistant");
+    if (!host) return;
+    var wasHidden = body.hidden;
+    body.hidden = !wasHidden;
+    head.textContent = (wasHidden ? "▾" : "▸") + " 思考";
+    var key = host.getAttribute("data-key");
+    var ri = parseInt(head.getAttribute("data-ri") || "0", 10);
+    for (var i = 0; i < state.items.length; i++) {
+      var it = state.items[i];
+      if (it.kind === "assistant" && String(it.id) === key) {
+        if (!it.reasoningOpen) it.reasoningOpen = {};
+        it.reasoningOpen[ri] = wasHidden;
+        break;
+      }
+    }
+  });
 
   /* ---------- block-level copy: one delegated listener for every
      .block-copy button (markdown code blocks + tool args/result) ---------- */
@@ -753,8 +1566,10 @@
           state.lastSessionId = msg.activeSessionId;
           state.items = []; state.seqs = new Set(); state.oldestSeq = Infinity;
           state.curAssistant = null; state.openBlocks = [];
+          state.hasMore = false; state.loadingOlder = false;
           state.queue = []; renderQueue();
           state.todos = []; renderTodos();   // host re-pushes via todos message
+          state.diffByCall = {}; state.activeRound = null; state.turnStartPerf = 0;
           suspended = false;
           forceBottom = true;
         }
@@ -792,13 +1607,58 @@
       }
       case "history": {
         if (msg.sessionId !== state.activeSessionId) return;
+        state.hasMore = !!msg.hasMore;
+        state.loadingOlder = false;
+        // Bridge-computed per-call "+N-M" diffs for this page.
+        var pageDiffs = msg.toolDiffs || {};
+        if (msg.isOlder) {
+          // Merge this page's per-call diffs BEFORE folding events, so the
+          // tool items pick up their "+N-M" while being mapped.
+          for (var pk in pageDiffs) {
+            if (Object.prototype.hasOwnProperty.call(pageDiffs, pk)) state.diffByCall[pk] = pageDiffs[pk];
+          }
+          // Infinite-scroll prepend: older page = complete messages already in
+          // the log, so map them straight to read-only items (no streaming
+          // state) and insert ABOVE the current list, keeping the anchor.
+          var before = olderItemsFrom(msg.events || []);
+          var newCount = before.length;
+          if (newCount > 0) {
+            var h0 = messagesEl.scrollHeight;
+            state.items = before.concat(state.items);
+            // Advance the paging cursor to the newest seq of the new page.
+            var newOldest = Infinity;
+            (msg.events || []).forEach(function (ev) {
+              if (ev && typeof ev.seq === "number" && ev.seq < newOldest) newOldest = ev.seq;
+            });
+            if (newOldest !== Infinity) state.oldestSeq = newOldest;
+            // The prepend must land even while the view is frozen mid-run: a
+            // plain render() would hit the `suspended` gate and return without
+            // touching the DOM, which locked history loading under running
+            // turns. Sync the list directly, then restore the freeze.
+            var prevSusp = suspended;
+            suspended = false;
+            forceBottom = false;
+            try { syncItems(); } finally { suspended = prevSusp; }
+            if (sentinelEl) {
+              sentinelEl.style.display = state.hasMore ? "block" : "none";
+              if (messagesEl.firstChild !== sentinelEl) messagesEl.insertBefore(sentinelEl, messagesEl.firstChild);
+            }
+            // Compensate: keep the same content under the viewport.
+            messagesEl.scrollTop += messagesEl.scrollHeight - h0;
+          }
+          break;
+        }
         state.items = []; state.seqs = new Set(); state.oldestSeq = Infinity;
         state.curAssistant = null; state.openBlocks = [];
+        state.diffByCall = {}; state.activeRound = null; state.turnStartPerf = 0;
         // NOTE: do NOT clear state.queue here — send() triggers a history
         // reload right after a queue prompt, and wiping the queue here would
         // race the session/queue frame and hide the pending rows.
         suspended = false;
         forceBottom = true;
+        for (var pk2 in pageDiffs) {
+          if (Object.prototype.hasOwnProperty.call(pageDiffs, pk2)) state.diffByCall[pk2] = pageDiffs[pk2];
+        }
         (msg.events || []).forEach(applyEvent);
         scheduleRender();
         break;
@@ -810,7 +1670,20 @@
       }
       case "running": {
         if (msg.sessionId === state.activeSessionId) {
+          var wasRunning = state.running;
           state.running = msg.running;
+          if (wasRunning && !msg.running) {
+            softEndTurn();
+            // The turn just ended: release any render freeze (the user may
+            // have been reading history mid-turn) so the final state — all
+            // live timers removed — actually reaches the DOM. Without this,
+            // scheduleRender stays swallowed by `suspended` forever and the
+            // frozen DOM keeps a ticking timer that nothing ever clears.
+            if (suspended) {
+              suspended = false;
+              scheduleRender();
+            }
+          }
           updateHeader();
         }
         break;
@@ -826,6 +1699,19 @@
         if (msg.sessionId !== state.activeSessionId) return;
         state.todos = msg.items || [];
         renderTodos();
+        break;
+      }
+      case "toolDiff": {
+        if (msg.sessionId !== state.activeSessionId) return;
+        state.diffByCall[msg.callId] = { added: msg.added, deleted: msg.deleted, path: msg.path };
+        var tool = findTool(msg.callId);
+        if (tool) {
+          var changed = !tool.diff || tool.diff.added !== msg.added || tool.diff.deleted !== msg.deleted;
+          tool.diff = { added: msg.added, deleted: msg.deleted, path: msg.path };
+          if (changed) tool.diffPop = true;
+          tool.version = (tool.version || 0) + 1;
+          scheduleRender();
+        }
         break;
       }
       case "commands": {
@@ -1143,20 +2029,28 @@
       groups.push("输入 " + fmtTok(billed) + " tok · 输出 " + fmtTok(u.outputTokens || 0) + " tok");
     }
     var line = groups.join(" | ");
+    var liveHtml = "";
     if (state.running) {
       var live = [];
+      // Live task clock (the value that will stay in history as 总计时) plus
+      // the running turn's accumulated "+N-M" — both tick/jump without a full
+      // rebuild via tickLive().
+      var ts = state.turnStartPerf ? Math.max(0, performance.now() - state.turnStartPerf) : 0;
+      live.push("<span id='live-status' data-start='" + (state.turnStartPerf || 0) + "'>" + fmtLive(ts) + "</span>");
+      var td = turnDiffLive();
+      if (td) live.push(diffChipHtml(td));
       if (state.firstTokenAt) {
         live.push("首 token " + ((state.firstTokenAt - state.turnStart) / 1000).toFixed(1) + "s");
         var elapsed = (performance.now() - state.firstTokenAt) / 1000;
         if (elapsed > 0.3 && state.turnOutput > 0) live.push(fmtTps(state.turnOutput / elapsed) + " tok/s");
       }
-      line = (live.length ? live.join(" · ") + " | " : "") + line;
+      liveHtml = live.join(" · ");
     }
-    if (ring) {
-      statusEl.innerHTML = ring + (line ? "&nbsp;|&nbsp;" + esc(line) : "");
-    } else {
-      statusEl.textContent = line;
-    }
+    var parts = [];
+    if (ring) parts.push(ring);
+    if (liveHtml) parts.push(liveHtml);
+    if (line) parts.push(esc(line));
+    statusEl.innerHTML = parts.join("&nbsp;|&nbsp;");
   }
 
   /* ---------- input ---------- */
@@ -1164,6 +2058,9 @@
   function autoGrow() {
     inputEl.style.height = "auto";
     inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + "px";
+    // The footer grows upward; if the message area was pinned to the bottom,
+    // keep it pinned so the newest content (incl. turn summaries) stays visible.
+    if (scrollPos()) messagesEl.scrollTop = messagesEl.scrollHeight;
   }
   inputEl.addEventListener("input", function () { autoGrow(); maybeTriggerMention(); });
   inputEl.addEventListener("keydown", function (e) {

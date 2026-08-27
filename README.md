@@ -36,5 +36,12 @@ code --install-extension dsh-vsc-0.1.0.vsix
 
 - 不重写聊天 UI（嵌入真实前端）；不截断/白名单事件；不要求重新输入 API key；不另起第二个 harness（发现不到才启动）
 - Webview 视图隐藏时会重建，DSH 前端自带重连，会自动恢复
-- 改动追踪只识别 `write`/`edit`/`str_replace_editor` 工具事件；agent 用 `bash` 之类的 shell 改文件不会被标记（git diff 审查仍可手工用）
+- 改动追踪只识别 `write`/`edit`/`str_replace_editor` 工具事件；agent 用 `bash`/`pwsh` 之类的 shell 改文件不会被标记（git diff 审查仍可手工用）
+- 行数统计（每轮的 `+N-M` 与任务结束的总和）同样只覆盖上述文件工具：`edit`/`str_replace` 用参数里的新旧文本精确计算，`write` 用调用瞬间磁盘上的旧内容对参数新内容做最佳估算（工具结果自带的 `meta.diffs` 会修正），shell 内改文件不计入
+- 计时器为桥接侧纯展示：单轮计时只挂在最新进行中的一轮上，任务（一次用户输入）结束即固化为历史里的"用时"，不会残留一串已完成的计时器
 - Ask DSH 发送到"最近更新的会话"（非空白），不会读 webview 里当前打开的是哪个会话
+
+## 文档
+
+- `docs/incident-2026-08-27-reasoning-fold.md` — 推理折叠流式中途不可展开的事故复盘（含行为轨迹与教训）
+- `docs/incident-2026-08-27-tool-bundles.md` — 工具动作分组（「⚙ 动作」大块）与计时器残留的事故复盘（含行为轨迹与教训）

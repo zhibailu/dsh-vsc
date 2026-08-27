@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { HarnessClient } from "../harness/client";
 import type { PromptContentPart, QueueAction } from "../harness/protocol";
-import type { HostMessage, PanelEvent, PanelSession, TodoItem, WebviewMessage } from "./protocol";
+import type { HostMessage, PanelEvent, PanelSession, TodoItem, ToolLineDiff, WebviewMessage } from "./protocol";
+import { countMetaDiff, countToolArgsDiff } from "../editor/diffCount";
 
 /**
  * Phase 1 — native sidebar chat panel.
@@ -24,6 +25,12 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
   private phase: "searching" | "starting" | "online" | "offline" = "searching";
   /** Live todo list of the active session (todos projection, realtime mux push). */
   private todos: TodoItem[] = [];
+  /**
+   * Pending file-mutation calls (callId → name+args), kept so the tool/result
+   * can refine the bridge-computed diff with the tool's own meta.diffs hunks.
+   */
+  private pendingArgs = new Map<string, { name: string; args: Record<string, unknown>; path?: string }>();
+  private readonly maxPendingArgs = 400;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -34,11 +41,12 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
+    const html = this.renderHtml();
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "dist", "media")],
     };
-    webviewView.webview.html = this.renderHtml();
+    webviewView.webview.html = html;
     webviewView.webview.onDidReceiveMessage((message) => {
       void this.onMessage(message as WebviewMessage);
     });
@@ -74,6 +82,14 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           this.post({ type: "todos", sessionId, items: this.todos });
           return;
         }
+      }
+      // Bridge-computed per-call line diffs ride alongside the raw event so
+      // the panel can show "+N-M" on the tool card immediately (and refine it
+      // once the tool's own result-time hunks land).
+      if (event.type === "tool/call") {
+        this.handleToolCallDiff(sessionId, event);
+      } else if (event.type === "tool/result") {
+        this.handleToolResultDiff(sessionId, event);
       }
       this.post({ type: "event", sessionId, event });
     });
@@ -246,6 +262,20 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           (error) => this.post({ type: "error", message: `复制失败: ${(error as Error).message}` })
         );
         break;
+      case "openFile": {
+        let abs = message.path;
+        if (!path.isAbsolute(abs)) {
+          const folder = vscode.workspace.workspaceFolders?.[0];
+          if (folder) abs = path.join(folder.uri.fsPath, abs);
+        }
+        void vscode.window
+          .showTextDocument(vscode.Uri.file(abs), { preview: true })
+          .then(
+            () => undefined,
+            (error) => this.post({ type: "error", message: `打开文件失败: ${(error as Error).message}` })
+          );
+        break;
+      }
       case "queueSteer":
       case "queueRemove": {
         if (!this.activeSessionId) break;
@@ -361,12 +391,17 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     this.post({ type: "index", files, dirs });
   }
 
-  /** Load a history page ending before `beforeSeq` (tail when undefined). */
+  /** Load a history page ending before `beforeSeq` (tail when undefined).
+   *  Older pages are prepends (isOlder: true) so the webview can append them
+   *  above the current messages without rebuilding the list. */
   private async loadHistory(sessionId: string, beforeSeq?: number): Promise<void> {
     if (!this.client || !sessionId) return;
     try {
-      const { events, projections } = await this.client.history(sessionId, beforeSeq, 30);
+      const { events, projections, hasMore } = await this.client.history(sessionId, beforeSeq, 30);
       const mapped = events.map((entry) => entry.event as PanelEvent);
+      // Per-call "+N-M" diffs for this page, shipped inside the history frame
+      // so the panel has them in hand while folding the page in.
+      const toolDiffs = this.diffEntriesForPage(mapped);
       // Task bar mirrors the web GUI: it renders the host-computed `todos`
       // projection (current turn's todo list; null after a turn/start reset),
       // NOT the raw log. Seed it from the tail page's projections block so a
@@ -376,7 +411,14 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         this.todos = Array.isArray(todos) ? todos : [];
         this.post({ type: "todos", sessionId, items: this.todos });
       }
-      this.post({ type: "history", sessionId, events: mapped, hasMore: false });
+      this.post({
+        type: "history",
+        sessionId,
+        events: mapped,
+        hasMore: hasMore === true,
+        isOlder: beforeSeq !== undefined,
+        toolDiffs: Object.keys(toolDiffs).length > 0 ? toolDiffs : undefined,
+      });
     } catch (error) {
       this.post({ type: "error", message: `读取历史失败: ${(error as Error).message}` });
     }
@@ -395,6 +437,128 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         if (sessionId === this.activeSessionId) this.postState();
       }
     }
+  }
+
+  /* ---------- bridge-computed per-tool line diffs ("+N-M") ---------- */
+
+  /** Resolve a possibly-relative tool path against the first workspace root. */
+  private resolveToolPath(raw: string): string | null {
+    if (!raw || raw.trim().length === 0) return null;
+    if (path.isAbsolute(raw)) return raw;
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) return null;
+    return path.join(folder.uri.fsPath, raw);
+  }
+
+  /** Pre-write content of a file (best effort; the harness usually applies
+   *  the mutation after emitting tool/call, so this is the old version). */
+  private readOldFile(raw: string): string | null {
+    const abs = this.resolveToolPath(raw);
+    if (!abs) return null;
+    try {
+      const stat = fs.statSync(abs);
+      if (!stat.isFile()) return null;
+      return fs.readFileSync(abs, "utf8");
+    } catch {
+      return null;
+    }
+  }
+
+  private parseToolArgs(argumentsText: unknown): Record<string, unknown> {
+    try {
+      const parsed = JSON.parse(String(argumentsText ?? "{}")) as Record<string, unknown>;
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private rememberPendingArgs(callId: string, name: string, args: Record<string, unknown>, filePath?: string): void {
+    this.pendingArgs.set(callId, { name, args, path: filePath });
+    if (this.pendingArgs.size > this.maxPendingArgs) {
+      const oldest = this.pendingArgs.keys().next().value;
+      if (oldest !== undefined) this.pendingArgs.delete(oldest);
+    }
+  }
+
+  /** tool/call: count from the arguments alone (visible while still running). */
+  private handleToolCallDiff(sessionId: string, event: PanelEvent): void {
+    const data = (event.data ?? {}) as Record<string, unknown>;
+    const name = String(data.name ?? "");
+    const callId = String(data.callId ?? "");
+    if (!name || !callId) return;
+    const args = this.parseToolArgs(data.arguments);
+    const diff = countToolArgsDiff(name, args, (p) => this.readOldFile(p));
+    if (diff) {
+      const rawPath = typeof args.file_path === "string" ? args.file_path : typeof args.path === "string" ? args.path : "";
+      const filePath = this.resolveToolPath(rawPath) ?? (rawPath || undefined);
+      this.rememberPendingArgs(`${sessionId}:${callId}`, name, args, filePath);
+      this.post({ type: "toolDiff", sessionId, callId, added: diff.added, deleted: diff.deleted, path: filePath });
+    }
+  }
+
+  /** tool/result: refine with the tool's own result-time hunks (meta.diffs). */
+  private handleToolResultDiff(sessionId: string, event: PanelEvent): void {
+    const data = (event.data ?? {}) as Record<string, unknown>;
+    const msg = (data.message ?? {}) as Record<string, unknown>;
+    let callId = String(data.callId ?? "");
+    if (!callId && Array.isArray(msg.content)) {
+      for (const block of msg.content as Record<string, unknown>[]) {
+        if (block && block.type === "tool-result" && block.toolCallId) {
+          callId = String(block.toolCallId);
+          break;
+        }
+      }
+    }
+    if (!callId) return;
+    const pending = this.pendingArgs.get(`${sessionId}:${callId}`);
+    if (!pending) return;
+    this.pendingArgs.delete(`${sessionId}:${callId}`);
+    const refined = countMetaDiff(data.meta, pending.name, pending.args);
+    if (refined) {
+      this.post({ type: "toolDiff", sessionId, callId, added: refined.added, deleted: refined.deleted, path: pending.path });
+    }
+  }
+
+  /**
+   * History path: recompute the per-call diffs for one page and ship them as a
+   * map (the panel merges it before applying the page's events). tool/result
+   * hunks win over arg-based counts, matching the live path.
+   */
+  private diffEntriesForPage(events: PanelEvent[]): Record<string, ToolLineDiff> {
+    const entries: Record<string, ToolLineDiff> = {};
+    const pending = new Map<string, { name: string; args: Record<string, unknown>; path?: string }>();
+    for (const ev of events) {
+      const data = (ev.data ?? {}) as Record<string, unknown>;
+      if (ev.type === "tool/call") {
+        const name = String(data.name ?? "");
+        const callId = String(data.callId ?? "");
+        if (!name || !callId) continue;
+        const args = this.parseToolArgs(data.arguments);
+        const rawPath = typeof args.file_path === "string" ? args.file_path : typeof args.path === "string" ? args.path : "";
+        const filePath = this.resolveToolPath(rawPath) ?? (rawPath || undefined);
+        pending.set(callId, { name, args, path: filePath });
+        const diff = countToolArgsDiff(name, args, (p) => this.readOldFile(p));
+        if (diff) entries[callId] = { ...diff, path: filePath };
+      } else if (ev.type === "tool/result") {
+        const msg = (data.message ?? {}) as Record<string, unknown>;
+        let callId = String(data.callId ?? "");
+        if (!callId && Array.isArray(msg.content)) {
+          for (const block of msg.content as Record<string, unknown>[]) {
+            if (block && block.type === "tool-result" && block.toolCallId) {
+              callId = String(block.toolCallId);
+              break;
+            }
+          }
+        }
+        if (!callId) continue;
+        const call = pending.get(callId);
+        if (!call) continue;
+        const refined = countMetaDiff(data.meta, call.name, call.args);
+        if (refined) entries[callId] = { ...refined, path: call.path };
+      }
+    }
+    return entries;
   }
 
   private async postModels(): Promise<void> {

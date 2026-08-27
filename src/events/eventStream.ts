@@ -4,6 +4,8 @@ import * as vscode from "vscode";
 export interface SessionEvent {
   type: string;
   seq?: number;
+  /** Unix epoch ms stamped by the harness on every durable log entry. */
+  time?: number;
   data?: Record<string, unknown>;
 }
 
