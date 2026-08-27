@@ -7,7 +7,7 @@ import { renderEmbedHtml } from "./panel/embed";
 import { DshStatusBar } from "./status";
 import { HarnessClient } from "./harness/client";
 import { configuredBase, discover, portOf } from "./harness/discover";
-import { startHarness, stopHarness, isRunning as harnessRunning } from "./harness/launcher";
+import { startHarness, stopHarness, isRunning as harnessRunning, readPidRecord, HARNESS_PID_FILE } from "./harness/launcher";
 import { HarnessEventStream } from "./events/eventStream";
 import { ChangeTracker } from "./editor/changeTracker";
 import { askSelection } from "./editor/askSelection";
@@ -20,6 +20,12 @@ const RIGHT_VIEW = "dsh.sidebar.right";
 const MAX_SPAWN_FAILURES = 3; // consecutive auto-spawn failures before giving up this session
 const OFFLINE_RECHECK_MS = 15000; // slow poll while down-but-not-our-job (user may start one manually)
 const DISCONNECT_RECHECK_MS = 3000; // grace before probing after the event stream drops
+
+// Module-level handoff for deactivate(): the exit path runs outside activate's
+// closure, so it needs its own reference to the connected client to ask the
+// harness "how many clients are attached?" before deciding whether to stop an
+// instance we spawned.
+let exitClient: HarnessClient | null = null;
 
 export function activate(context: vscode.ExtensionContext): void {
   const log = vscode.window.createOutputChannel("DSH Bridge");
@@ -110,6 +116,11 @@ export function activate(context: vscode.ExtensionContext): void {
       const port = portOf(base);
       status.setStarting(port);
       panel.setPhase("starting");
+      // Same data root as the web GUI (~/.dsh): the extension is a shared
+      // client, so "one runs, the other watches" means ONE history. Port
+      // ownership is the natural exclusivity — the extension's own instance
+      // takes the same port the web GUI would use, so the two can never
+      // co-write the same log.
       await startHarness(port, log);
       await waitUntilAlive(base, START_TIMEOUT_MS);
     } finally {
@@ -166,6 +177,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const d = await discover();
     if (d.alive) {
       client = new HarnessClient(d.base);
+      exitClient = client;
       status.setOnline(d.version ?? "?");
       log.appendLine(`harness connected at ${d.base} (version ${d.version})`);
       panel.setClient(client, d.version);
@@ -173,6 +185,7 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     client = null;
+    exitClient = null;
     panel.setClient(null);
     await checkHarness();
   }
@@ -242,12 +255,59 @@ function logDeactivate(line: string): void {
   }
 }
 
+/**
+ * Reference-counted shutdown: only ever stop the harness THIS extension
+ * spawned, and only when no other client is attached to it.
+ *
+ * - Shared harness (not ours): never killed — the browser GUI or the user's
+ *   own `dsh web` may be using it; we only note it stays alive.
+ * - Auto-started harness (ours): ask host.describe for clientCount (patched
+ *   DSH; see scripts/patch-dsh-client-count.ps1). If another client (e.g. a
+ *   browser tab attached to our instance) is still connected, leave it
+ *   running and log where its PID record lives. Otherwise (clientCount
+ *   unknown because the patch is absent, or <= 1 = only us) stop it and
+ *   remove the pid record, so no orphaned windowless dsh keeps running.
+ */
 export function deactivate(): Promise<void> {
-  // Close the harness this extension auto-started when VS Code exits, so no
-  // orphaned dsh keeps running in the background. A pre-existing/shared
-  // harness (not spawned by us) is left untouched — same rule as dsh.stop.
   logDeactivate("deactivate called");
-  return stopHarness().then((result) => {
-    logDeactivate(`stopHarness -> ${JSON.stringify(result)}`);
-  });
+  const owned = harnessRunning();
+  const record = readPidRecord();
+  logDeactivate(`owned=${owned} pidRecord=${JSON.stringify(record)}`);
+  if (!owned) {
+    logDeactivate("shared or no harness — nothing to stop");
+    return Promise.resolve();
+  }
+  // Ask the harness how many clients are attached. clientCount is
+  // undefined when the DSH patch is missing (zod strips unknown keys), so
+  // treat undefined as "no other client known" — the process is ours and
+  // windowless, an orphan is worse than stopping it.
+  const probe = exitClient ?? new HarnessClient(configuredBase());
+  let settled = false;
+  const stopOwned = (why: string): void => {
+    if (settled) return;
+    settled = true;
+    logDeactivate(why);
+    void stopHarness().then((result) => {
+      logDeactivate(`stopHarness -> ${JSON.stringify(result)}`);
+    });
+  };
+  void probe
+    .describe(AbortSignal.timeout(2000))
+    .then((desc) => {
+      const n = desc.clientCount;
+      logDeactivate(`clientCount=${String(n)}`);
+      if (n !== undefined && n > 1) {
+        settled = true;
+        logDeactivate(`keep running (${n} clients attached) — pid record: ${HARNESS_PID_FILE}`);
+        return;
+      }
+      stopOwned(`no other client (clientCount=${String(n)}) — stopping owned instance`);
+    })
+    .catch(() => {
+      stopOwned("clientCount probe failed — stopping owned instance");
+    });
+  // Timeout fallback: can't ask, but the instance is ours — stop it.
+  // Guarded by `settled` so a late describe answer cannot double-kill.
+  setTimeout(() => stopOwned("clientCount probe timed out — stopping owned instance"), 2500);
+  return Promise.resolve();
 }

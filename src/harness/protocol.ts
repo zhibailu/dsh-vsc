@@ -42,6 +42,13 @@ export interface HostDescription {
   attachedSessions: number;
   home: string;
   canOpenPath: boolean;
+  /**
+   * Live consumers of /api/events.mux (each browser tab and each extension
+   * client counts as one; the caller's own stream is included). Added by
+   * scripts/patch-dsh-client-count.ps1 — absent when the patch is not applied
+   * (e.g. dsh updated but the patch not re-run). `undefined` = unknown.
+   */
+  clientCount?: number;
 }
 
 /** session.list item. */

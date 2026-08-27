@@ -89,8 +89,8 @@
       "properties": {
         "dshVsc.url": {
           "type": "string",
-          "default": "http://127.0.0.1:3081",
-          "description": "Base URL of the DSH harness this extension talks to. Default 3081 = an instance owned by the extension (auto-started, stopped when VS Code exits). Point it at an existing harness (e.g. the web GUI's http://127.0.0.1:3080) to use it in shared mode: the extension then only connects and never kills it. Also honors DSH_WEB_URL."
+          "default": "http://127.0.0.1:3080",
+          "description": "Base URL of the DSH harness this extension talks to. Default 3080 = the web GUI's harness: the extension connects as a shared client and never starts or kills it. If nothing answers there, the extension auto-starts its own instance (recorded in %TEMP%\\dsh-vsc-harness.pid, stopped when VS Code exits unless another client is attached). Also honors DSH_WEB_URL."
         },
         "dshVsc.autoStart": {
           "type": "boolean",

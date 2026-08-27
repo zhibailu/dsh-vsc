@@ -1,10 +1,51 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as vscode from "vscode";
 
 let child: ChildProcess | undefined;
 let launcher: { node: string; script: string } | null = null;
+
+/**
+ * Persistent record of the harness this extension auto-started, so a detached
+ * background instance is never "invisible": the file names the PID, port and
+ * start time, and deactivate clears it. Re-run of the shutdown logic reads it
+ * to decide whether a still-alive process is ours to stop.
+ */
+export const HARNESS_PID_FILE = join(tmpdir(), "dsh-vsc-harness.pid");
+
+export interface HarnessPidRecord {
+  pid: number;
+  port: number;
+  startedAt: string;
+  args: string[];
+}
+
+export function writePidRecord(record: HarnessPidRecord): void {
+  try {
+    writeFileSync(HARNESS_PID_FILE, JSON.stringify(record, null, 2), "utf8");
+  } catch {
+    /* a missing pid file must never break lifecycle */
+  }
+}
+
+export function clearPidRecord(): void {
+  try {
+    rmSync(HARNESS_PID_FILE, { force: true });
+  } catch {
+    /* noop */
+  }
+}
+
+export function readPidRecord(): HarnessPidRecord | null {
+  try {
+    if (!existsSync(HARNESS_PID_FILE)) return null;
+    return JSON.parse(readFileSync(HARNESS_PID_FILE, "utf8")) as HarnessPidRecord;
+  } catch {
+    return null;
+  }
+}
 
 /** Whether our spawned harness child is still alive. */
 export function isRunning(): boolean {
@@ -125,6 +166,10 @@ async function resolveLauncher(): Promise<{ node: string; script: string } | nul
  * - no console anywhere in the tree, so there is nothing to close and nothing
  *   to kill by accident.
  * - GITHUB_TOKEN resolved (process env, then Windows user env).
+ * - Uses the SAME data root as the web GUI (~/.dsh): the extension is a shared
+ *   client, so "one runs, the other watches" means ONE history. Port ownership
+ *   is the natural exclusivity — our instance takes the same port the web GUI
+ *   would use (default 3080), so the two can never co-write the same log.
  * Stop it with the `dsh.stop` command or by closing VS Code
  * (taskkill /T kills the whole tree).
  */
@@ -137,7 +182,7 @@ export async function startHarness(port: number, log: vscode.OutputChannel): Pro
     return;
   }
   const args = ["web", "--no-open", "--port", String(port)];
-  log.appendLine(`$ ${l.node} ${l.script} ${args.join(" ")} (direct node, windowless, detached)`);
+  log.appendLine(`$ ${l.node} ${l.script} ${args.join(" ")} (direct node, windowless, detached, shared ~/.dsh)`);
   log.appendLine(
     env.GITHUB_TOKEN
       ? `GITHUB_TOKEN: ${env.GITHUB_TOKEN.length} chars (${process.env.GITHUB_TOKEN ? "process env" : "Windows user env fallback"})`
@@ -150,9 +195,11 @@ export async function startHarness(port: number, log: vscode.OutputChannel): Pro
     stdio: "ignore",
     env,
   });
+  writePidRecord({ pid: child.pid ?? 0, port, startedAt: new Date().toISOString(), args: [l.script, ...args] });
   child.on("exit", (code) => {
     log.appendLine(`auto-started dsh web exited (code ${code})`);
     child = undefined;
+    clearPidRecord();
   });
   child.on("error", (err) => log.appendLine(`dsh web spawn error: ${err.message}`));
   child.unref();
@@ -162,11 +209,15 @@ export async function startHarness(port: number, log: vscode.OutputChannel): Pro
  *  touches the process THIS extension spawned; a pre-existing/shared harness
  *  is never killed. Resolves with what actually happened. */
 export function stopHarness(): Promise<{ killed: boolean; pid?: number; error?: string }> {
-  if (!child || child.exitCode !== null) return Promise.resolve({ killed: false });
+  if (!child || child.exitCode !== null) {
+    clearPidRecord();
+    return Promise.resolve({ killed: false });
+  }
   const pid = child.pid;
   child = undefined;
   return new Promise((resolve) => {
     execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, (error) => {
+      clearPidRecord();
       resolve(error ? { killed: false, pid, error: error.message } : { killed: true, pid });
     });
   });
