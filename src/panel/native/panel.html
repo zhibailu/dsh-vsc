@@ -72,8 +72,17 @@
   .tool .dot.err { background: var(--err); }
   .tool .tname { font-weight: 600; }
   .tool .targs { padding: 0 8px 6px; }
+  .tool .tlabel { font-size: 11px; color: var(--muted); margin: 4px 0 2px; }
   .tool pre { margin: 4px 0; padding: 6px 8px; background: var(--input-bg); border-radius: 3px;
-              white-space: pre-wrap; word-break: break-all; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
+              white-space: pre-wrap; word-break: break-all; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px;
+              position: relative; padding-right: 56px; }
+
+  /* block-level copy buttons (markdown code blocks + tool args/result) */
+  pre.md-code { position: relative; padding-right: 56px; }
+  .block-copy { position: absolute; top: 4px; right: 4px; z-index: 5;
+                background: var(--input-bg); color: var(--muted); border: 1px solid var(--border);
+                border-radius: 3px; font-size: 10px; padding: 1px 6px; cursor: pointer; opacity: .85; }
+  .block-copy:hover { color: var(--fg); border-color: var(--accent); opacity: 1; }
 
   .sys-err { margin: 6px 0; padding: 6px 10px; border-left: 3px solid var(--err); color: var(--err); white-space: pre-wrap; font-size: 12px; }
   .cmd-note { margin: 6px 0; padding: 4px 10px; border-left: 3px solid var(--ok); color: var(--muted); font-size: 12px; white-space: pre-wrap; }
@@ -234,7 +243,9 @@
       } else {
         var lines = parts[i].split("\n");
         if (lines[0] && /^[a-zA-Z0-9_-]+$/.test(lines[0].trim())) lines.shift();
-        out += "<pre><code>" + esc(lines.join("\n")) + "</code></pre>";
+        var code = esc(lines.join("\n"));
+        out += "<pre class='md-code'><code>" + code + "</code>"
+             + "<button class='block-copy' title='复制代码'>⧉ 复制</button></pre>";
       }
     }
     return out;
@@ -524,12 +535,42 @@
         break;
       }
       case "tool": {
-        el.className = "tool";
+        // Collapsible tool call — summary row shows status + name, the
+        // details (args / result) live under the fold (mirrors web GUI).
+        var det = document.createElement("details");
+        det.className = "tool";
+        if (item.status === "running") det.open = true;
         var dot = item.status === "running" ? "run" : item.status === "error" ? "err" : "ok";
-        var body = "<summary><span class='dot " + dot + "'></span><span class='tname'>" + esc(item.name) + "</span></summary>";
-        if (item.argsText) body += "<div class='targs'><pre>" + esc(item.argsText) + "</pre></div>";
-        if (item.resultText) body += "<div class='targs'><pre>" + esc(item.resultText) + "</pre></div>";
-        el.innerHTML = body;
+        var sum = document.createElement("summary");
+        var d = document.createElement("span");
+        d.className = "dot " + dot;
+        var nm = document.createElement("span");
+        nm.className = "tname";
+        nm.textContent = item.name;
+        sum.appendChild(d);
+        sum.appendChild(nm);
+        det.appendChild(sum);
+        var mkBlock = function (label, text) {
+          var w = document.createElement("div");
+          w.className = "targs";
+          var lab = document.createElement("div");
+          lab.className = "tlabel";
+          lab.textContent = label;
+          var pre = document.createElement("pre");
+          pre.textContent = text;
+          var cp = document.createElement("button");
+          cp.className = "block-copy";
+          cp.textContent = "⧉ 复制";
+          cp.title = "复制 " + label;
+          cp.onclick = function () { post({ type: "copyText", text: text }); };
+          w.appendChild(lab);
+          w.appendChild(pre);
+          w.appendChild(cp);
+          return w;
+        };
+        if (item.argsText) det.appendChild(mkBlock("参数", item.argsText));
+        if (item.resultText) det.appendChild(mkBlock("结果", item.resultText));
+        el.appendChild(det);
         break;
       }
       case "cmd": {
@@ -548,6 +589,21 @@
     }
     return el;
   }
+
+  /* ---------- block-level copy: one delegated listener for every
+     .block-copy button (markdown code blocks + tool args/result) ---------- */
+  messagesEl.addEventListener("click", function (ev) {
+    var btn = ev.target && ev.target.closest ? ev.target.closest(".block-copy") : null;
+    if (!btn) return;
+    var pre = btn.closest("pre") || btn.parentElement && btn.parentElement.querySelector("pre");
+    var text = pre ? pre.textContent.replace(/⧉ 复制$/, "").trim() : "";
+    if (text) {
+      post({ type: "copyText", text: text });
+      var old = btn.textContent;
+      btn.textContent = "✓ 已复制";
+      setTimeout(function () { btn.textContent = old; }, 1200);
+    }
+  });
 
   /* ---------- pending-send queue rows (session/queue snapshot) ---------- */
   function renderQueue() {
