@@ -252,6 +252,7 @@
     sessions: [], activeSessionId: null,
     items: [], seqs: new Set(), oldestSeq: Infinity,
     running: false, lastTurn: -1,
+    dirtySync: false,       // one unfrozen render right after turn/end
     curAssistant: null, openBlocks: [],
     titles: {},
     models: null,            // { current: {provider, model}, groups: [...] }
@@ -503,10 +504,11 @@
       }
       case "assistant/message": {
         ensureAssistant();
-        state.curAssistant.blocks = contentBlocks(d.message);
-        state.curAssistant.done = true;
-        state.curAssistant.streaming = false;
-        state.curAssistant.version = (state.curAssistant.version || 0) + 1;
+        var finMsg = state.curAssistant;
+        finMsg.blocks = contentBlocks(d.message);
+        finMsg.done = true;
+        finMsg.streaming = false;
+        finMsg.version = (finMsg.version || 0) + 1;
         state.curAssistant = null;
         state.openBlocks = [];
         state.activeRound = null;
@@ -571,6 +573,12 @@
         // the totals are right under the newest message (no scrolling up).
         if (endTurn) {
           state.items.push({ kind: "turn-end", turn: endTurn.turn, elapsed: endTurn.elapsed, totalDiff: endTurn.totalDiff });
+          // The final render of this round must still happen even though the
+          // turn-end makes everything frozen: rAF coalescing can delay the
+          // last text-delta render past this boundary, and frozen would then
+          // lock the card at its pre-text state (missing body, "no text"
+          // until reload). Let the NEXT render ignore frozen once.
+          state.dirtySync = true;
         }
         break;
       }
@@ -726,6 +734,7 @@
     } else {
       // A single failure must not stall the whole panel (it has, twice).
       try { syncItems(); } catch (e) {}
+      state.dirtySync = false;
     }
     // Re-attach the history sentinel at the very top (list sync wipes children).
     // Hide it when no more history is available so it never re-triggers.
@@ -863,7 +872,7 @@
     for (var i = 0; i < state.items.length; i++) {
       var it = state.items[i];
       if (!it.id) it.id = state.nextItemId++;
-      var frozen = i <= frozenEnd;
+      var frozen = i <= frozenEnd && !state.dirtySync;
       if (it.kind === "tool") {
         var gk = "gt" + String(it.turn);
         if (!curGroup || curGroup.key !== gk) {
@@ -909,7 +918,7 @@
           var tel = byKey[tkey] || null;
           if (tel) {
             delete byKey[tkey];
-            if (!p.frozen && tel.dataset.ver !== tver) { syncToolEl(tit, tel); tel.dataset.ver = tver; }
+            if (!p.frozen) { syncToolEl(tit, tel); tel.dataset.ver = tver; }
           } else {
             tel = renderItem(tit);
             tel.dataset.ver = tver;
@@ -925,7 +934,11 @@
         var el = byKey[p.key] || null;
         if (el) {
           delete byKey[p.key];
-          if (!p.frozen && el.dataset.ver !== ver2) {
+          // State-driven sync (web-like): non-frozen items are ALWAYS
+          // re-synced from their current state — no version-skip shortcut.
+          // A skipped update permanently freezes a card when the version
+          // number ever desyncs from its content (missing text until reload).
+          if (!p.frozen) {
             if (it2.kind === "assistant") syncAssistantEl(it2, el);
             else {
               var ne = renderItem(it2);
@@ -998,6 +1011,7 @@
     }
     var prev = null;
     want.forEach(function (w) {
+      var wasNew = !byKey[w.key];
       var node = byKey[w.key];
       if (!node) {
         node = document.createElement("div");
@@ -1039,10 +1053,15 @@
           else if (sc) sc.remove();
         }
       }
-      // Order it after the previous block; skip when already in position so
-      // the DOM is never touched (no detach, no reinsert, no edge cases).
+      // Order it after the previous block. NEW nodes MUST be inserted: the
+      // "already in position" skip only applies to reused nodes — a fresh
+      // node's nextSibling is null, and when ref is also null (append to
+      // end) the skip would wrongly fire and the node would never land in
+      // the DOM (the missing-text bug).
       var ref = prev ? prev.nextSibling : el.firstChild;
-      if (ref !== node && node.nextSibling !== ref) el.insertBefore(node, ref);
+      if (wasNew || (ref !== node && node.nextSibling !== ref)) {
+        el.insertBefore(node, ref);
+      }
       prev = node;
     });
     // Blocks that vanished from the item.
@@ -1648,9 +1667,21 @@
           }
           break;
         }
-        state.items = []; state.seqs = new Set(); state.oldestSeq = Infinity;
-        state.curAssistant = null; state.openBlocks = [];
-        state.diffByCall = {}; state.activeRound = null; state.turnStartPerf = 0;
+        // Non-older history (initial load / session switch / send-time
+        // refresh). RACE FIX: when the live turn is ALREADY streaming
+        // (state.running), do NOT wipe state.items — send() triggers a
+        // refresh right after prompt(), and its history tail may lag behind
+        // the live stream; clearing here would destroy the in-flight
+        // assistant items and the reply would render truncated/missing.
+        // Merge incrementally instead: applyEvent dedupes by seq, so only
+        // events not yet seen are folded in. Full reset is kept for the
+        // non-streaming cases (initial load, session switch).
+        if (!state.running) {
+          state.items = []; state.seqs = new Set(); state.oldestSeq = Infinity;
+          state.curAssistant = null; state.openBlocks = [];
+          state.diffByCall = {}; state.activeRound = null; state.turnStartPerf = 0;
+          state.dirtySync = false;
+        }
         // NOTE: do NOT clear state.queue here — send() triggers a history
         // reload right after a queue prompt, and wiping the queue here would
         // race the session/queue frame and hide the pending rows.
