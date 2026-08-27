@@ -53,14 +53,26 @@ export class HarnessClient {
     return this.call<{ accepted: true }>(METHODS.sessionPrompt, { sessionId, mode, content });
   }
 
-  /** One history page: raw events + hasMore. */
+  /** One history page: raw events + hasMore. Tail page (beforeSeq absent)
+   *  additionally carries the projections block (values.todos = current todo
+   *  list or null after a turn/start reset — the same source the web GUI's
+   *  task bar renders from). */
   history(
     sessionId: string,
     beforeSeq?: number,
     maxMessages = 30,
     signal?: AbortSignal
-  ): Promise<{ events: { event: SessionEventLike }[]; hasMore: boolean }> {
-    return this.call<{ events: { event: SessionEventLike }[]; hasMore: boolean }>(
+  ): Promise<{
+    events: { event: SessionEventLike }[];
+    hasMore: boolean;
+    projections?: {
+      asOfSeq?: number;
+      values?: {
+        todos?: { content: string; status: "pending" | "in_progress" | "completed" }[] | null;
+      };
+    };
+  }> {
+    return this.call(
       METHODS.sessionHistory,
       { sessionId, beforeSeq, maxMessages },
       signal

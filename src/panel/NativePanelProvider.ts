@@ -64,9 +64,10 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         return;
       }
       if (event.type === "session/projection") {
-        // Realtime projection push — the `todos` unit carries the agent's
-        // whole task list (last todo/write wins). Other projection frames
-        // fall through to the generic event path below.
+        // Realtime projection push — the `todos` unit carries the current
+        // turn's whole task list, reset to null on every turn/start (mirrors
+        // the web GUI's task bar exactly). Other projection frames fall
+        // through to the generic event path below.
         const data = (event.data ?? {}) as { key?: unknown; value?: unknown };
         if (data.key === "todos") {
           this.todos = Array.isArray(data.value) ? (data.value as TodoItem[]) : [];
@@ -364,46 +365,20 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
   private async loadHistory(sessionId: string, beforeSeq?: number): Promise<void> {
     if (!this.client || !sessionId) return;
     try {
-      const { events } = await this.client.history(sessionId, beforeSeq, 30);
+      const { events, projections } = await this.client.history(sessionId, beforeSeq, 30);
       const mapped = events.map((entry) => entry.event as PanelEvent);
-      // Replay the durable todo/write snapshot into the task bar when loading
-      // the tail page: the mux projection only pushes live changes, so a
-      // freshly opened session's todo list has to come from its log (last
-      // todo/write wins). The 30-message page may be too shallow (todo/write
-      // is a log-only event that older prompts push out of the window), so
-      // scan a deeper window separately. Paging older history never re-runs it.
-      if (beforeSeq === undefined) await this.replayTodos(sessionId);
+      // Task bar mirrors the web GUI: it renders the host-computed `todos`
+      // projection (current turn's todo list; null after a turn/start reset),
+      // NOT the raw log. Seed it from the tail page's projections block so a
+      // freshly opened session shows the same state as the web tab.
+      if (beforeSeq === undefined) {
+        const todos = projections?.values?.todos;
+        this.todos = Array.isArray(todos) ? todos : [];
+        this.post({ type: "todos", sessionId, items: this.todos });
+      }
       this.post({ type: "history", sessionId, events: mapped, hasMore: false });
     } catch (error) {
       this.post({ type: "error", message: `读取历史失败: ${(error as Error).message}` });
-    }
-  }
-
-  /** Find the latest todo/write in a deep history window and push it. */
-  private async replayTodos(sessionId: string): Promise<void> {
-    if (!this.client || !sessionId) return;
-    try {
-      // 500 messages covers ~all practical todo histories; a todo/write is a
-      // whole-list replacement so the newest one wins.
-      const { events } = await this.client.history(sessionId, undefined, 500);
-      const todoWrite = [...events]
-        .map((entry) => entry.event as PanelEvent)
-        .reverse()
-        .find((e) => e.type === "todo/write");
-      if (todoWrite) {
-        const data = (todoWrite.data ?? {}) as { todos?: unknown };
-        if (Array.isArray(data.todos)) {
-          this.todos = data.todos as TodoItem[];
-          this.post({ type: "todos", sessionId, items: this.todos });
-          return;
-        }
-      }
-      if (sessionId === this.activeSessionId) {
-        this.todos = [];
-        this.post({ type: "todos", sessionId, items: [] });
-      }
-    } catch (error) {
-      this.log(`todos replay failed for ${sessionId}: ${(error as Error).message}`);
     }
   }
 
