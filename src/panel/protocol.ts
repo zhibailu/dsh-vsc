@@ -11,6 +11,12 @@ export interface PanelEvent {
   surfaceOp?: string;
 }
 
+/** One todo item — the `todos` projection unit (dsh-tool-todo / dsh-session types). */
+export interface TodoItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
 /** Host → webview messages. */
 export type HostMessage =
   | {
@@ -30,6 +36,7 @@ export type HostMessage =
   | { type: "queue"; sessionId: string; items: { id: string; placement: string; text: string }[] }
   | { type: "commands"; items: { name: string; description?: string; input?: { hint?: string; images?: boolean } }[] }
   | { type: "cmdResult"; text: string; ok: boolean }
+  | { type: "todos"; sessionId: string; items: TodoItem[] }
   | { type: "error"; message: string };
 
 /** Webview → host messages. */

@@ -127,6 +127,29 @@
   .edit-box { width: 100%; box-sizing: border-box; background: var(--input-bg); color: var(--fg);
               border: 1px solid var(--accent); border-radius: 3px; padding: 6px 8px;
               font-family: inherit; font-size: 13px; resize: vertical; min-height: 60px; }
+
+  /* task bar (todos projection) — sits just above the input row */
+  #todo-bar { padding: 2px 8px; background: rgba(128,128,128,.06); }
+  #todo-bar[hidden] { display: none; }
+  #todo-toggle { cursor: pointer; user-select: none; font-size: 12px; color: var(--fg); background: none;
+                 border: none; padding: 2px 0; font-family: inherit; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  #todo-toggle:hover { color: var(--accent); }
+  #todo-toggle .tcount { color: var(--muted); font-weight: 400; }
+  #todo-toggle .tcount b { color: #e0b94a; font-weight: 600; }
+  #todo-toggle .tchevron, #todo-chevron { color: var(--muted); font-size: 10px; }
+  #todo-list { margin: 2px 0 4px; padding: 0; list-style: none; max-height: 120px; overflow-y: auto;
+               border: 1px solid var(--border); border-radius: 3px; background: var(--input-bg); }
+  #todo-list[hidden] { display: none; }
+  .t-item { display: flex; align-items: flex-start; gap: 6px; padding: 3px 8px; font-size: 12px; line-height: 1.45; }
+  .t-item + .t-item { border-top: 1px solid var(--border); }
+  .t-item .tmark { flex: none; width: 14px; text-align: center; font-size: 12px; }
+  .t-item.pending .tmark { color: var(--muted); }
+  .t-item.in_progress .tmark { color: #e0b94a; }
+  .t-item.completed .tmark { color: var(--ok); }
+  .t-item.completed .ttext { color: var(--muted); text-decoration: line-through; }
+  .t-item.in_progress .ttext { color: var(--fg); }
+  .t-item .ttext { flex: 1; word-wrap: break-word; }
+  .todo-empty { color: var(--muted); font-size: 11px; padding: 2px 0; }
 </style>
 </head>
 <body>
@@ -142,6 +165,10 @@
     <div id="mention-menu" hidden></div>
     <div id="attach-row" hidden></div>
     <div id="queue-row" hidden></div>
+    <section id="todo-bar" hidden>
+      <button id="todo-toggle" title="展开/折叠任务">☑ 任务 <span class="tcount" id="todo-count"></span> <span id="todo-chevron">▸</span></button>
+      <ul id="todo-list" hidden></ul>
+    </section>
     <div id="input-row">
       <textarea id="input" rows="1" placeholder="发消息…（Enter 发送，运行中自动排队；Shift+Enter 换行；Ctrl+V 粘图片）"></textarea>
       <button id="send" class="btn primary" title="发送">➤</button>
@@ -156,7 +183,9 @@
   var $ = function (id) { return document.getElementById(id); };
   var messagesEl = $("messages"), pillEl = $("pill"), selEl = $("session-select"),
       modelEl = $("model-select"), attachEl = $("attach-row"), queueEl = $("queue-row"),
-      inputEl = $("input"), sendBtn = $("send"), cancelBtn = $("cancel"), statusEl = $("input-status");
+      inputEl = $("input"), sendBtn = $("send"), cancelBtn = $("cancel"), statusEl = $("input-status"),
+      todoBarEl = $("todo-bar"), todoToggleEl = $("todo-toggle"), todoListEl = $("todo-list"),
+      todoCountEl = $("todo-count"), todoChevronEl = $("todo-chevron");
 
   var state = {
     connected: false, version: null, phase: "searching",
@@ -169,6 +198,9 @@
     usage: null,             // active session tokenUsage projection
     queue: [],               // session/queue snapshot for the active session
     commands: [],            // slash-command catalog (commands/list)
+    todos: [],               // todos projection for the active session
+    todoCache: null,         // { sessionId, items } — latest todos seen, survives session switches
+    todoOpen: false,         // task-bar expanded?
     turnStart: 0, firstTokenAt: 0, turnOutput: 0
   };
 
@@ -551,6 +583,35 @@
     });
   }
 
+  /* ---------- task bar (todos projection) ---------- */
+  var TODO_MARK = { pending: "○", in_progress: "●", completed: "✓" };
+  function renderTodos() {
+    var has = state.todos && state.todos.length > 0;
+    todoBarEl.hidden = !has;
+    if (!has) return;
+    var active = state.todos.filter(function (t) { return t.status === "in_progress"; }).length;
+    var done = state.todos.filter(function (t) { return t.status === "completed"; }).length;
+    todoCountEl.innerHTML = (active ? "<b>" + active + " 进行中</b> · " : "") + done + "/" + state.todos.length;
+    todoListEl.hidden = !state.todoOpen;
+    todoChevronEl.textContent = state.todoOpen ? "▾" : "▸";
+    if (!state.todoOpen) return;
+    todoListEl.innerHTML = "";
+    state.todos.forEach(function (t) {
+      var li = document.createElement("li");
+      li.className = "t-item " + t.status;
+      var mark = document.createElement("span");
+      mark.className = "tmark";
+      mark.textContent = TODO_MARK[t.status] || "○";
+      var txt = document.createElement("span");
+      txt.className = "ttext";
+      txt.textContent = t.content;
+      txt.title = t.content;
+      li.appendChild(mark);
+      li.appendChild(txt);
+      todoListEl.appendChild(li);
+    });
+  }
+
   /* ---------- protocol from host ---------- */
   window.addEventListener("message", function (event) {
     var msg = event.data;
@@ -579,8 +640,15 @@
           state.items = []; state.seqs = new Set(); state.oldestSeq = Infinity;
           state.curAssistant = null; state.openBlocks = [];
           state.queue = []; renderQueue();
+          state.todos = []; renderTodos();   // host re-pushes via todos message
           suspended = false;
           forceBottom = true;
+        }
+        // Re-apply the latest known todos for the now-active session (host may
+        // have sent the todos message before this state update landed).
+        if (state.todoCache && state.todoCache.sessionId === state.activeSessionId) {
+          state.todos = state.todoCache.items;
+          renderTodos();
         }
         updateHeader();
         scheduleRender();
@@ -637,6 +705,13 @@
         if (msg.sessionId !== state.activeSessionId) return;
         state.queue = msg.items || [];
         renderQueue();
+        break;
+      }
+      case "todos": {
+        state.todoCache = { sessionId: msg.sessionId, items: msg.items || [] };
+        if (msg.sessionId !== state.activeSessionId) return;
+        state.todos = msg.items || [];
+        renderTodos();
         break;
       }
       case "commands": {
@@ -1108,6 +1183,10 @@
     autoGrow();
   }
   cancelBtn.addEventListener("click", function () { post({ type: "cancel" }); });
+  if (todoToggleEl) todoToggleEl.addEventListener("click", function () {
+    state.todoOpen = !state.todoOpen;
+    renderTodos(); // rebuilds the list + chevron in the new state
+  });
   selEl.addEventListener("change", function () {
     if (selEl.value) post({ type: "selectSession", sessionId: selEl.value });
   });

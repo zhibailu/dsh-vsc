@@ -283,11 +283,12 @@ export function deactivate(): Promise<void> {
   // windowless, an orphan is worse than stopping it.
   const probe = exitClient ?? new HarnessClient(configuredBase());
   let settled = false;
+  let stopDone = Promise.resolve();
   const stopOwned = (why: string): void => {
     if (settled) return;
     settled = true;
     logDeactivate(why);
-    void stopHarness().then((result) => {
+    stopDone = stopHarness().then((result) => {
       logDeactivate(`stopHarness -> ${JSON.stringify(result)}`);
     });
   };
@@ -309,5 +310,8 @@ export function deactivate(): Promise<void> {
   // Timeout fallback: can't ask, but the instance is ours — stop it.
   // Guarded by `settled` so a late describe answer cannot double-kill.
   setTimeout(() => stopOwned("clientCount probe timed out — stopping owned instance"), 2500);
-  return Promise.resolve();
+  // Wait for any actual stop to finish before VS Code tears down, so the
+  // taskkill lands. If the probe is still in flight, that's fine — the
+  // timeout branch will stop it; we just wait on the (possibly pending) stop.
+  return stopDone;
 }
