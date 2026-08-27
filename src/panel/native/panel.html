@@ -77,6 +77,14 @@
               white-space: pre-wrap; word-break: break-all; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px;
               position: relative; padding-right: 56px; }
 
+  /* markdown tables (GFM, mirrors web GUI) */
+  .md-table { overflow-x: auto; margin: 6px 0; border: 1px solid var(--border); border-radius: 3px; }
+  .md-table table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  .md-table th, .md-table td { border: 1px solid var(--border); padding: 4px 8px; text-align: left;
+                                white-space: nowrap; word-break: normal; }
+  .md-table th { background: var(--input-bg); font-weight: 600; position: sticky; top: 0; }
+  .md-table td { white-space: pre-wrap; word-break: break-word; }
+
   /* block-level copy buttons (markdown code blocks + tool args/result) */
   pre.md-code { position: relative; padding-right: 56px; }
   .block-copy { position: absolute; top: 4px; right: 4px; z-index: 5;
@@ -234,12 +242,62 @@
       .replace(/`([^`]+)`/g, "<code>$1</code>")
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   }
+  /** Split a plain-text block into GFM table rows and non-table lines.
+   *  A table: a header line of |cells|, a separator line of |---|, then rows. */
+  function isTableSeparator(line) {
+    var cells = line.trim().replace(/^\||\|$/g, "").split("|");
+    if (cells.length < 2) return false;
+    return cells.every(function (c) { return /^\s*:?-+:?\s*$/.test(c.trim()); });
+  }
+  function splitTable(block) {
+    var lines = block.split("\n");
+    var out = [];
+    var i = 0;
+    while (i < lines.length) {
+      var l = lines[i];
+      // peek: current line + next line form a table header + separator?
+      if (l.indexOf("|") !== -1 && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+        var table = [l, lines[i + 1]];
+        i += 2;
+        while (i < lines.length && lines[i].indexOf("|") !== -1) { table.push(lines[i]); i++; }
+        out.push({ type: "table", rows: table });
+      } else {
+        out.push({ type: "text", text: l });
+        i++;
+      }
+    }
+    return out;
+  }
+  function renderTable(rows) {
+    var header = rows[0];
+    var split = function (line) {
+      return line.trim().replace(/^\||\|$/g, "").split("|").map(function (c) { return c.trim(); });
+    };
+    var head = split(header);
+    var body = rows.slice(2);
+    var html = "<div class='md-table'><table><thead><tr>";
+    for (var h = 0; h < head.length; h++) html += "<th>" + renderInline(head[h]) + "</th>";
+    html += "</tr></thead><tbody>";
+    for (var r = 0; r < body.length; r++) {
+      var cells = split(body[r]);
+      html += "<tr>";
+      for (var c = 0; c < head.length; c++) html += "<td>" + renderInline(cells[c] || "") + "</td>";
+      html += "</tr>";
+    }
+    html += "</tbody></table></div>";
+    return html;
+  }
   function renderText(text) {
     var parts = String(text).split(/```/);
     var out = "";
     for (var i = 0; i < parts.length; i++) {
       if (i % 2 === 0) {
-        out += renderInline(parts[i]);
+        var block = parts[i];
+        var segs = splitTable(block);
+        for (var s = 0; s < segs.length; s++) {
+          if (segs[s].type === "table") out += renderTable(segs[s].rows);
+          else out += renderInline(segs[s].text) + (s < segs.length - 1 ? "\n" : "");
+        }
       } else {
         var lines = parts[i].split("\n");
         if (lines[0] && /^[a-zA-Z0-9_-]+$/.test(lines[0].trim())) lines.shift();
