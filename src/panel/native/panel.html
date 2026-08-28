@@ -1101,9 +1101,13 @@
     } else if (ltx) {
       ltx.remove();
     }
-    // Copy action once the reply is complete.
+    // Copy action once the reply is complete — ONLY when the message has
+    // text blocks. Reasoning and text are independent blocks: a step that
+    // produced only thinking (no text body) gets no copy button, instead of
+    // an empty-copy button that also leaves a stray blank row in the card.
+    var hasTextBlock = item.blocks.some(function (b) { return b.type === "text"; });
     var ax = el.querySelector(".msg-actions");
-    if (!item.streaming && !ax) {
+    if (!item.streaming && hasTextBlock && !ax) {
       var aa = document.createElement("div");
       aa.className = "msg-actions";
       var acp = document.createElement("button");
@@ -1114,7 +1118,7 @@
       };
       aa.appendChild(acp);
       el.appendChild(aa);
-    } else if (item.streaming && ax) {
+    } else if ((item.streaming || !hasTextBlock) && ax) {
       ax.remove();
     }
   }
@@ -1403,7 +1407,7 @@
           lt.textContent = item.startPerf ? fmtLive(performance.now() - item.startPerf) : fmtLive(0);
           el.appendChild(lt);
         }
-        if (!item.streaming) {
+        if (!item.streaming && item.blocks.some(function (b) { return b.type === "text"; })) {
           var aa = document.createElement("div");
           aa.className = "msg-actions";
           var acp = document.createElement("button");
