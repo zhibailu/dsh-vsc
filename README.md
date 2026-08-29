@@ -31,13 +31,19 @@ code --install-extension dsh-vsc-0.1.0.vsix --force
 
 ## 截图
 
-![侧边栏概览](docs/screenshots/sidebar.png)
+**① 侧边栏概览** —— 左侧活动栏 DSH 图标打开原生侧边栏面板
 
-![对话与工具动作（上）](docs/screenshots/chat0.png)
+<img src="docs/screenshots/sidebar.png" width="210" alt="侧边栏概览" />
 
-![对话与工具动作（下）](docs/screenshots/chat1.png)
+**② 对话与工具动作** —— 流式回复、思考折叠、「⚙ 动作」相邻工具合并块、每轮实时计时（上 / 下两张）
 
-![编辑器右键 Ask DSH](docs/screenshots/ask-menu.png)
+| 上 | 下 |
+|---|---|
+| <img src="docs/screenshots/chat0.png" width="205" alt="对话（上）" /> | <img src="docs/screenshots/chat1.png" width="205" alt="对话（下）" /> |
+
+**③ 编辑器右键 Ask DSH** —— 选中代码后右键 → 菜单底部 "DSH: Ask about selection"
+
+<img src="docs/screenshots/ask-menu.png" width="300" alt="右键 Ask DSH" />
 
 ## 功能
 

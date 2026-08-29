@@ -12,9 +12,9 @@
 |---|---|---|
 | `sidebar.png` | ✅ 已放 | 打开 VS Code → 左侧活动栏点 DSH 图标 → 截整个侧边栏（含会话列表和输入框） |
 | `chat0.png` / `chat1.png` | ✅ 已放（两张，任务长放不下） | 侧边栏发一条消息让 agent 干活 → 等有工具调用 → 从上到下截两张（含「⚙ 动作」折叠块、思考栏、计时器、+N-M） |
-| `ask-menu.png` | ⏳ 待拍 | 编辑器**选中一段代码** → 右键 → 菜单底部截屏（含 "DSH: Ask about selection" 项；需先选中文本，否则右键菜单不显示该项） |
+| `ask-menu.png` | ✅ 已放 | 编辑器**选中一段代码** → 右键 → 菜单底部截屏（含 "DSH: Ask about selection" 项；需先选中文本，否则右键菜单不显示该项） |
 
 ## 注意
 
 - README 用相对路径 `docs/screenshots/xxx.png` 引用，文件放对即生效
-- 不用改 README，不用处理尺寸，随便截
+- 显示尺寸由 README 里 `<img width>` 控制（约原尺寸 1/10 面积），换图不用改 README
