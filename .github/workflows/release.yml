@@ -1,0 +1,38 @@
+name: Release vsix
+
+# 打 v* tag（如 v0.1.0）→ 自动构建并发布 .vsix 到 GitHub Releases
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Package vsix
+        # 同本地命令：esbuild 构建 + vsce package --no-dependencies
+        # 产物名 = dsh-vsc-<version>.vsix（由 package.json version 决定）
+        run: npm run package
+
+      - name: Publish GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: 'dsh-vsc-*.vsix'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          generateReleaseNotes: true
