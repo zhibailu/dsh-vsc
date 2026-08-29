@@ -7,5 +7,6 @@ esbuild.js
 tsconfig.json
 *.vsix
 **/*.tsbuildinfo
-PLAN.md
+internal/**
+docs/**
 .gitignore

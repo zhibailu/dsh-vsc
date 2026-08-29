@@ -12,3 +12,7 @@ scripts/*.log
 
 # One-off debug/scratch scripts (never commit)
 scratch/
+
+# Private workspace docs (never commit): plans, incident postmortems,
+# upstream tracking, anything meant only for the maintainer.
+internal/

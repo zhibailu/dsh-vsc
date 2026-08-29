@@ -5,6 +5,15 @@
   "version": "0.1.0",
   "publisher": "local",
   "license": "MIT",
+  "author": "zhibailu",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhibailu/dsh-vsc.git"
+  },
+  "homepage": "https://github.com/zhibailu/dsh-vsc",
+  "bugs": {
+    "url": "https://github.com/zhibailu/dsh-vsc/issues"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -101,7 +110,7 @@
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.overlay.json --noEmit",
     "build": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "package": "node esbuild.js && vsce package --no-dependencies"
