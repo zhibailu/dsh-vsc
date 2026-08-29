@@ -746,7 +746,15 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         : undefined;
       this.post({
         type: "presets",
-        items: presets.map((p) => p.agentPreset),
+        items: presets
+          .filter((p) => !p.broken)
+          .map((p) => ({
+            id: p.id,
+            trust: p.trust,
+            isDefault: p.isDefault,
+            ...(p.name !== undefined ? { name: p.name } : {}),
+            ...(p.description !== undefined ? { description: p.description } : {}),
+          })),
         current,
       });
     } catch (error) {

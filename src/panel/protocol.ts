@@ -84,7 +84,17 @@ export type HostMessage =
       }[];
     }
   | { type: "interactionSettled"; sessionId: string; rpcId: string }
-  | { type: "presets"; items: string[]; current?: string }
+  | {
+      type: "presets";
+      items: {
+        id: string;
+        trust: "system" | "user";
+        isDefault: boolean;
+        name?: string;
+        description?: string;
+      }[];
+      current?: string;
+    }
   | { type: "error"; message: string };
 
 /** Webview → host messages. */

@@ -138,9 +138,21 @@ export class HarnessClient {
     });
   }
 
-  /** Available agent presets (agentPreset.list). */
-  agentPresetList(signal?: AbortSignal): Promise<{ presets: { agentPreset: string; description?: string }[] }> {
-    return this.call<{ presets: { agentPreset: string; description?: string }[] }>(METHODS.agentPresetList, {}, signal);
+  /** Available agent presets (agentPreset.list). Entry fields mirror the
+   *  host schema: id/trust/isDefault/name/description/broken. */
+  agentPresetList(signal?: AbortSignal): Promise<{
+    presets: {
+      id: string;
+      trust: "system" | "user";
+      isDefault: boolean;
+      name?: string;
+      description?: string;
+      broken?: string;
+    }[];
+    authorable: boolean;
+    hasDocument: boolean;
+  }> {
+    return this.call(METHODS.agentPresetList, {}, signal);
   }
 
   /** Select an agent preset for a session (agentPreset.select). */

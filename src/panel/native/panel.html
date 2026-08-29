@@ -2241,9 +2241,12 @@
     presetEl.appendChild(ph);
     presets.forEach(function (p) {
       var o = document.createElement("option");
-      o.value = p;
-      o.textContent = p;
-      if (cur && p === cur) o.selected = true;
+      o.value = p.id;
+      var label = p.name || p.id;
+      if (p.trust === "user") label += " · 自定义";
+      o.textContent = label;
+      o.title = p.description || "";
+      if (cur && p.id === cur) o.selected = true;
       presetEl.appendChild(o);
     });
     presetEl.hidden = false;
