@@ -2,23 +2,30 @@
 
 在 VS Code 侧边栏里用 DeepSeek Harness（DSH）干活：嵌入真实 Web GUI + 原生编辑器桥（选区提问、改动审查、文件跳转）。
 
-## 快速开始（最短路径）
+## 安装（推荐：下载 Release 安装包）
 
-需要：Windows / macOS / Linux + Node.js 18+ + VS Code。
+需要：Windows / macOS / Linux + VS Code。
+
+1. 打开 [Releases](https://github.com/zhibailu/dsh-vsc/releases)，下载最新的 `dsh-vsc-<版本号>.vsix`
+2. 安装（VS Code 里 Ctrl+Shift+P → **Install from VSIX**，或命令行）：
 
 ```bash
-# 1. 安装 dsh（harness 本体）
-npm i -g @deepseek-ai/dsh
-
-# 2. 拿源码、装依赖、打包、安装扩展
-git clone https://github.com/zhibailu/dsh-vsc.git
-cd dsh-vsc
-npm install
-npm run package
 code --install-extension dsh-vsc-0.1.0.vsix --force
 ```
 
-> 也可以不装全局 dsh：你自己用 `npx @deepseek-ai/dsh web` 跑着 harness，扩展会自动连上它（默认 `http://127.0.0.1:3080`，可用 `DSH_WEB_URL` 或设置 `dshVsc.url` 覆盖）。
+3. 重载窗口（Ctrl+Shift+P → **Reload Window**），左侧活动栏点 **DSH** 图标即可使用
+
+> dsh（harness 本体）不用单独装：扩展发现没有 harness 在跑时，会自动拉起一个（`npm i -g @deepseek-ai/dsh` 或 `npx @deepseek-ai/dsh web` 跑着的会被直接复用，默认 `http://127.0.0.1:3080`，可用 `DSH_WEB_URL` 或设置 `dshVsc.url` 覆盖）。
+
+## 从源码构建（开发者 / 想改代码时）
+
+```bash
+git clone https://github.com/zhibailu/dsh-vsc.git
+cd dsh-vsc
+npm install
+npm run package     # esbuild 构建 + vsce 打包，产出 dsh-vsc-<版本号>.vsix
+code --install-extension dsh-vsc-0.1.0.vsix --force
+```
 
 ## 使用
 
