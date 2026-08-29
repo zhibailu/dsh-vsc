@@ -69,6 +69,11 @@ export class HarnessClient {
       asOfSeq?: number;
       values?: {
         todos?: { content: string; status: "pending" | "in_progress" | "completed" }[] | null;
+        /** Current session permission presets (header 权限 select). */
+        permissions?: {
+          options?: { value: string; name?: string }[];
+          currentValue?: string;
+        };
       };
     };
   }> {

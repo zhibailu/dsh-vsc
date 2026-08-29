@@ -26,6 +26,10 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
   private phase: "searching" | "starting" | "online" | "offline" = "searching";
   /** Live todo list of the active session (todos projection, realtime mux push). */
   private todos: TodoItem[] = [];
+  /** Current permission presets of the active session (permissions projection,
+   *  seeded from history tail + refreshed by session/projection pushes).
+   *  Wire values: read-only / workspace-write / danger-full-access. */
+  private permissions: { options: { value: string; name?: string }[]; currentValue?: string } | null = null;
   /**
    * Pending file-mutation calls (callId → name+args), kept so the tool/result
    * can refine the bridge-computed diff with the tool's own meta.diffs hunks.
@@ -77,12 +81,21 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       if (event.type === "session/projection") {
         // Realtime projection push — the `todos` unit carries the current
         // turn's whole task list, reset to null on every turn/start (mirrors
-        // the web GUI's task bar exactly). Other projection frames fall
-        // through to the generic event path below.
+        // the web GUI's task bar exactly). The `permissions` unit carries the
+        // session's permission presets (header 权限 select). Other projection
+        // frames fall through to the generic event path below.
         const data = (event.data ?? {}) as { key?: unknown; value?: unknown };
         if (data.key === "todos") {
           this.todos = Array.isArray(data.value) ? (data.value as TodoItem[]) : [];
           this.post({ type: "todos", sessionId, items: this.todos });
+          return;
+        }
+        if (data.key === "permissions") {
+          const value = data.value as { options?: { value: string; name?: string }[]; currentValue?: string } | undefined;
+          if (value && Array.isArray(value.options)) {
+            this.permissions = { options: value.options, currentValue: value.currentValue };
+            this.postPermissions();
+          }
           return;
         }
       }
@@ -192,7 +205,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         await this.loadHistory(this.activeSessionId, undefined);
         await this.postModels();
         await this.postCommands();
-        await this.postPresets();
+        this.postPermissions();
       }
     } catch (error) {
       this.post({ type: "error", message: `会话列表失败: ${(error as Error).message}` });
@@ -249,7 +262,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         await this.loadHistory(message.sessionId, undefined);
         await this.postModels();
         await this.postCommands();
-        await this.postPresets();
+        this.postPermissions();
         break;
       case "getModels":
         await this.postModels();
@@ -352,16 +365,20 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         }
         break;
       }
-      case "getPresets":
-        await this.postPresets();
+      case "getPermissions":
+        this.postPermissions();
         break;
-      case "selectPreset": {
+      case "selectPermission": {
         if (!this.activeSessionId) break;
         try {
-          await this.client.agentPresetSelect(this.activeSessionId, message.agentPreset);
-          await this.postPresets();
+          // Same admission path as the web composer's /permission picker:
+          // run the slash command against the session's agent.
+          const outcome = await this.client?.commandExecute(this.activeSessionId, `/permission ${message.permission}`);
+          if (outcome === undefined || (outcome as { matched?: boolean }).matched === false) {
+            this.post({ type: "error", message: `切换权限失败: host 未提供 /permission 命令` });
+          }
         } catch (error) {
-          this.post({ type: "error", message: `切换权限预设失败: ${(error as Error).message}` });
+          this.post({ type: "error", message: `切换权限失败: ${(error as Error).message}` });
         }
         break;
       }
@@ -513,6 +530,13 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         const todos = projections?.values?.todos;
         this.todos = Array.isArray(todos) ? todos : [];
         this.post({ type: "todos", sessionId, items: this.todos });
+        // Permission presets ride the same projections block (web GUI's
+        // 权限 select): seed the header select from the tail page.
+        const perms = projections?.values?.permissions;
+        if (perms) {
+          this.permissions = { options: perms.options ?? [], currentValue: perms.currentValue };
+          this.postPermissions();
+        }
       }
       this.post({
         type: "history",
@@ -737,30 +761,27 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async postPresets(): Promise<void> {
-    if (!this.client) return;
-    try {
-      const { presets } = await this.client.agentPresetList();
-      const current = this.activeSessionId
-        ? this.sessions.find((s) => s.sessionId === this.activeSessionId)?.agentPreset
-        : undefined;
-      this.post({
-        type: "presets",
-        items: presets
-          .filter((p) => !p.broken)
-          .map((p) => ({
-            id: p.id,
-            trust: p.trust,
-            isDefault: p.isDefault,
-            ...(p.name !== undefined ? { name: p.name } : {}),
-            ...(p.description !== undefined ? { description: p.description } : {}),
-          })),
-        current,
-      });
-    } catch (error) {
-      // Preset list is advisory; fail silently.
-      this.log(`presets: ${(error as Error).message}`);
+  private async postPermissions(): Promise<void> {
+    // Post the cached permissions projection (seeded from history tail,
+    // refreshed by session/projection pushes). Header labels come from the
+    // known three presets (web GUI semantics: 仅可查看 / 可写入工作区 / 完全权限).
+    if (!this.permissions || this.permissions.options.length === 0) {
+      this.post({ type: "permissions", options: [], current: undefined });
+      return;
     }
+    const LABELS: Record<string, string> = {
+      "read-only": "仅可查看",
+      "workspace-write": "可写入工作区",
+      "danger-full-access": "完全权限",
+    };
+    this.post({
+      type: "permissions",
+      options: this.permissions.options.map((o) => ({
+        value: o.value,
+        label: LABELS[o.value] ?? o.name ?? o.value,
+      })),
+      current: this.permissions.currentValue,
+    });
   }
 
   private postState(): void {

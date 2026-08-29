@@ -85,14 +85,8 @@ export type HostMessage =
     }
   | { type: "interactionSettled"; sessionId: string; rpcId: string }
   | {
-      type: "presets";
-      items: {
-        id: string;
-        trust: "system" | "user";
-        isDefault: boolean;
-        name?: string;
-        description?: string;
-      }[];
+      type: "permissions";
+      options: { value: string; label: string }[];
       current?: string;
     }
   | { type: "error"; message: string };
@@ -129,8 +123,8 @@ export type WebviewMessage =
       sessionId: string;
       answers: { id: string; selected: string[]; custom?: string }[];
     }
-  | { type: "getPresets" }
-  | { type: "selectPreset"; agentPreset: string };
+  | { type: "getPermissions" }
+  | { type: "selectPermission"; permission: string };
 
 export interface PanelSession {
   sessionId: string;

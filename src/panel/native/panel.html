@@ -365,7 +365,8 @@
     curAssistant: null, openBlocks: [],
     titles: {},
     models: null,            // { current: {provider, model}, groups: [...] }
-    presets: [],             // agent preset ids (agentPreset.list)
+    presets: [],             // permission presets (projections.permissions): [{value,label}]
+    permCurrent: "",         // active session's current permission value
     interact: null,          // pending interaction card {rpcId, kind, ...} | null
     usage: null,             // active session tokenUsage projection
     queue: [],               // session/queue snapshot for the active session
@@ -1764,8 +1765,9 @@
         renderEffortSelect();
         break;
       }
-      case "presets": {
-        state.presets = msg.items || [];
+      case "permissions": {
+        state.presets = msg.options || [];
+        state.permCurrent = msg.current;
         renderPresetSelect();
         break;
       }
@@ -2205,11 +2207,12 @@
     updateStatusLine();
   }
 
-  /* ---------- reasoning-effort + agent-preset selects ---------- */
+  /* ---------- reasoning-effort + permission-preset selects ---------- */
   // The effort list is model-dependent (upstream catalog: current.reasoningEffort
   // + the model's advertised efforts); when the model changes we re-render it
-  // from the latest catalog snapshot. Presets come from agentPreset.list (real
-  // availability, matches the web GUI).
+  // from the latest catalog snapshot. Presets come from the session's
+  // `permissions` projection (read-only / workspace-write / danger-full-access,
+  // matches the web GUI's 权限 select).
   var effortOptions = ["low", "medium", "high"];
   function renderEffortSelect() {
     if (!state.models || !state.models.current) { effortEl.hidden = true; return; }
@@ -2230,8 +2233,7 @@
   function renderPresetSelect() {
     var presets = state.presets || [];
     if (!presets.length) { presetEl.hidden = true; return; }
-    var act = state.sessions.find(function (x) { return x.sessionId === state.activeSessionId; });
-    var cur = act && act.agentPreset;
+    var cur = state.permCurrent;
     presetEl.innerHTML = "";
     var ph = document.createElement("option");
     ph.value = "";
@@ -2241,12 +2243,9 @@
     presetEl.appendChild(ph);
     presets.forEach(function (p) {
       var o = document.createElement("option");
-      o.value = p.id;
-      var label = p.name || p.id;
-      if (p.trust === "user") label += " · 自定义";
-      o.textContent = label;
-      o.title = p.description || "";
-      if (cur && p.id === cur) o.selected = true;
+      o.value = p.value;
+      o.textContent = p.label || p.value;
+      if (cur && p.value === cur) o.selected = true;
       presetEl.appendChild(o);
     });
     presetEl.hidden = false;
@@ -2677,10 +2676,10 @@
   });
   presetEl.addEventListener("change", function () {
     var v = presetEl.value;
-    if (v) post({ type: "selectPreset", agentPreset: v });
+    if (v) post({ type: "selectPermission", permission: v });
   });
-  // Pull the agent-preset list once the panel is live (header select).
-  post({ type: "getPresets" });
+  // Pull the permission presets once the panel is live (header select).
+  post({ type: "getPermissions" });
 
   /* ---------- image attachments (Ctrl+V paste) ---------- */
   var attachments = [];
