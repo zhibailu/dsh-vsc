@@ -130,6 +130,13 @@
   .md-table th { background: var(--input-bg); font-weight: 600; position: sticky; top: 0; }
   .md-table td { white-space: pre-wrap; word-break: break-word; }
 
+  /* markdown headings / em / del (the panel's markdown-lite output) */
+  .md-h1, .md-h2, .md-h3, .md-h4, .md-h5, .md-h6 { margin: 10px 0 4px; font-weight: 700; line-height: 1.35; }
+  .md-h1 { font-size: 17px; } .md-h2 { font-size: 15px; } .md-h3 { font-size: 14px; }
+  .md-h4, .md-h5, .md-h6 { font-size: 13px; }
+  .body em { font-style: italic; }
+  .body del { color: var(--muted); }
+
   /* block-level copy buttons (markdown code blocks + tool args/result) */
   pre.md-code { position: relative; padding-right: 56px; }
   .block-copy { position: absolute; top: 4px; right: 4px; z-index: 5;
@@ -403,7 +410,9 @@
   function renderInline(text) {
     return esc(text)
       .replace(/`([^`]+)`/g, "<code>$1</code>")
-      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*([^*\n]+)\*/g, "<em>$1</em>")
+      .replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
   }
   /** GFM table separator line check: a row of |---| (optionally :aligned:). */
   function isTableSeparator(line) {
@@ -465,6 +474,15 @@
         i += 2;
         while (i < lines.length && lines[i].indexOf("|") !== -1) { rows.push(lines[i]); i++; }
         out += renderTable(rows);
+        continue;
+      }
+      // ATX heading: # .. ###### (web GUI renders the same)
+      var hm = /^(#{1,6})\s+(.+)$/.exec(t);
+      if (hm) {
+        var lvl = hm[1].length;
+        out += "<div class='md-h" + lvl + "'>" + renderInline(hm[2]) + "</div>";
+        i++;
+        if (i < lines.length) out += "\n";
         continue;
       }
       // ordinary line
