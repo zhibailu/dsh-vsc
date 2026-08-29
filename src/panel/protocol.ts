@@ -11,6 +11,8 @@ export interface PanelEvent {
   time?: number;
   data?: Record<string, unknown>;
   surfaceOp?: string;
+  /** Envelope rpcId of a server-request frame (approval/question answerable frames). */
+  rpcId?: string;
 }
 
 /** One bridge-computed line diff for a tool call ("+N-M"). */
@@ -48,6 +50,41 @@ export type HostMessage =
   | { type: "cmdResult"; text: string; ok: boolean }
   | { type: "todos"; sessionId: string; items: TodoItem[] }
   | { type: "toolDiff"; sessionId: string; callId: string; added: number; deleted: number; path?: string }
+  | {
+      type: "ask";
+      /** Structured editor-context block (file / selection / workspace). */
+      context: string;
+      /** Choice buttons rendered inside the panel (id === "custom" gets an input box). */
+      choices: { id: string; label: string; detail?: string }[];
+    }
+  | {
+      type: "interaction";
+      sessionId: string;
+      /** rpcId to echo when answering via /api/respond. */
+      rpcId: string;
+      kind: "approval";
+      approvalId: string;
+      toolName: string;
+      callId?: string;
+      reason?: string;
+    }
+  | {
+      type: "interaction";
+      sessionId: string;
+      rpcId: string;
+      kind: "question";
+      questions: {
+        id: string;
+        question: string;
+        detail?: string;
+        header?: string;
+        multiSelect?: boolean;
+        options?: { label: string; description?: string }[];
+        intent?: { kind: "plan-review"; approve: string } | { kind: string; approve: string };
+      }[];
+    }
+  | { type: "interactionSettled"; sessionId: string; rpcId: string }
+  | { type: "presets"; items: string[]; current?: string }
   | { type: "error"; message: string };
 
 /** Webview → host messages. */
@@ -62,11 +99,28 @@ export type WebviewMessage =
   | { type: "refresh" }
   | { type: "refreshFiles" }
   | { type: "getModels" }
-  | { type: "selectModel"; provider: string; model: string }
+  | { type: "selectModel"; provider: string; model: string; reasoningEffort?: string }
   | { type: "copyText"; text: string }
   | { type: "openFile"; path: string }
   | { type: "queueSteer"; itemId: string }
-  | { type: "queueRemove"; itemId: string };
+  | { type: "queueRemove"; itemId: string }
+  | { type: "askPick"; choiceId: string; customText?: string }
+  | { type: "askCancel" }
+  | {
+      type: "respondApproval";
+      rpcId: string;
+      sessionId: string;
+      approvalId: string;
+      outcome: "allowed-once" | "rejected";
+    }
+  | {
+      type: "respondQuestion";
+      rpcId: string;
+      sessionId: string;
+      answers: { id: string; selected: string[]; custom?: string }[];
+    }
+  | { type: "getPresets" }
+  | { type: "selectPreset"; agentPreset: string };
 
 export interface PanelSession {
   sessionId: string;
@@ -74,6 +128,8 @@ export interface PanelSession {
   blank: boolean;
   updatedAt: number;
   title?: string;
+  /** Current agent preset of the session (agentPreset.list/select domain). */
+  agentPreset?: string;
   /** tokenUsage projection (aggregate over the durable log). */
   usage?: {
     uncachedInputTokens?: number;

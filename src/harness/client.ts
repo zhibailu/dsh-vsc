@@ -106,8 +106,46 @@ export class HarnessClient {
     return this.call<ModelCatalog>(METHODS.sessionModels, { sessionId });
   }
 
-  selectModel(sessionId: string, provider: string, model: string): Promise<{ selected: { provider: string; model: string } }> {
-    return this.call<{ selected: { provider: string; model: string } }>(METHODS.sessionSelectModel, { sessionId, provider, model });
+  selectModel(sessionId: string, provider: string, model: string, reasoningEffort?: string): Promise<{ selected: { provider: string; model: string } }> {
+    return this.call<{ selected: { provider: string; model: string } }>(
+      METHODS.sessionSelectModel,
+      { sessionId, provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) }
+    );
+  }
+
+  /**
+   * Answer a server-request frame (approval/requested, question/requested).
+   * The rpcId MUST be the envelope id echoed from the frame — the harness
+   * routes the client-response by it. Wire: POST /api/respond with a
+   * client-response body; the HTTP response is an RpcReceipt
+   * ({accepted:true} | {accepted:false, reason}).
+   */
+  respond(rpcId: string, value: unknown, signal?: AbortSignal): Promise<{ accepted: boolean; reason?: string }> {
+    const request = {
+      type: "client-response" as const,
+      rpcId,
+      result: { ok: true as const, value },
+    };
+    return fetch(`${this.base}/api/respond`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+      signal,
+    }).then(async (res) => {
+      if (!res.ok) throw new Error(`dsh api respond: HTTP ${res.status}`);
+      const body = (await res.json()) as { accepted: boolean; reason?: string };
+      return body;
+    });
+  }
+
+  /** Available agent presets (agentPreset.list). */
+  agentPresetList(signal?: AbortSignal): Promise<{ presets: { agentPreset: string; description?: string }[] }> {
+    return this.call<{ presets: { agentPreset: string; description?: string }[] }>(METHODS.agentPresetList, {}, signal);
+  }
+
+  /** Select an agent preset for a session (agentPreset.select). */
+  agentPresetSelect(sessionId: string, agentPreset: string): Promise<{ agentPreset: string }> {
+    return this.call<{ agentPreset: string }>(METHODS.agentPresetSelect, { sessionId, agentPreset });
   }
 
   updateQueue(sessionId: string, itemId: string, action: QueueAction): Promise<{ accepted: true }> {

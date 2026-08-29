@@ -23,10 +23,12 @@
          font-family: var(--vscode-font-family); font-size: var(--vscode-font-size, 13px); overflow: hidden; }
 
   header { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--border); flex: none; }
-  .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
-  .pill.on { background: rgba(78, 201, 176, .15); color: var(--ok); }
-  .pill.off { background: rgba(244, 76, 76, .15); color: var(--err); }
-  .pill.busy { background: rgba(224, 185, 74, .18); color: #e0b94a; }
+  /* connection dot — compact: no text, color carries the state */
+  .pill { flex: none; width: 10px; height: 10px; border-radius: 50%; font-size: 0; }
+  .pill.on { background: var(--ok); }
+  .pill.off { background: var(--err); }
+  .pill.busy { background: #e0b94a; }
+  .pill.loading { background: var(--muted); }
   #session-select { flex: 1; min-width: 0; background: var(--input-bg); color: var(--fg);
                     border: 1px solid var(--border); border-radius: 2px; padding: 2px 4px; font-size: 12px; }
   #new-session { flex: none; width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 2px;
@@ -36,10 +38,11 @@
                     background: transparent; color: var(--fg); cursor: pointer; font-size: 12px; line-height: 1; }
   #delete-session:hover { background: var(--input-bg); }
   #delete-session[data-arm="1"] { color: var(--err); border-color: var(--err); font-size: 11px; }
-  #model-select { flex: none; max-width: 120px; background: var(--input-bg); color: var(--fg);
-                  border: 1px solid var(--border); border-radius: 2px; padding: 2px 4px; font-size: 12px; }
+  #model-select, #effort-select, #preset-select { flex: none; max-width: 110px; background: var(--input-bg); color: var(--fg);
+                   border: 1px solid var(--border); border-radius: 2px; padding: 2px 4px; font-size: 12px; }
 
   #attach-row { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 4px; }
+  #attach-row[hidden] { display: none; } /* explicit display overrides [hidden]; re-assert */
   .attach-chip { display: flex; align-items: center; gap: 4px; max-width: 180px; border: 1px solid var(--border);
                  border-radius: 3px; padding: 2px 4px; background: var(--input-bg); font-size: 11px; }
   .attach-chip img { width: 22px; height: 22px; object-fit: cover; border-radius: 2px; flex: none; }
@@ -162,6 +165,7 @@
   .m-crumbs span.cur { color: var(--fg); cursor: default; }
   #input-status { font-size: 11px; color: var(--muted); min-height: 16px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #input-row { display: flex; gap: 6px; align-items: flex-end; }
+  #input-row[hidden] { display: none; } /* explicit display wins over [hidden]'s default; re-assert it */
   #input { flex: 1; resize: none; background: var(--input-bg); color: var(--fg); border: 1px solid var(--border);
            border-radius: 3px; padding: 6px 8px; font-family: inherit; font-size: 13px; max-height: 180px; }
   #input:focus { outline: 1px solid var(--accent); }
@@ -209,13 +213,103 @@
   .t-item.in_progress .ttext { color: var(--fg); }
   .t-item .ttext { flex: 1; word-wrap: break-word; }
   .todo-empty { color: var(--muted); font-size: 11px; padding: 2px 0; }
+
+  /* ask card — in-panel "ask about selection" (sits just above the input row) */
+  #ask-card { padding: 6px 8px; background: rgba(128,128,128,.06); border-top: 1px solid var(--border); }
+  #ask-card[hidden] { display: none; }
+  .ask-head { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+  .ask-close { margin-left: auto; background: none; border: none; color: var(--muted); cursor: pointer;
+               font-size: 12px; padding: 0 2px; font-family: inherit; }
+  .ask-close:hover { color: var(--fg); }
+  .ask-ctx { font-size: 11px; color: var(--muted); max-height: 64px; overflow-y: auto; word-break: break-all;
+             white-space: pre-wrap; border: 1px solid var(--border); border-radius: 3px;
+             background: var(--input-bg); padding: 4px 6px; margin-bottom: 6px; }
+  .ask-choices { display: flex; flex-wrap: wrap; gap: 4px; }
+  .ask-choice { background: var(--input-bg); color: var(--fg); border: 1px solid var(--border);
+                border-radius: 3px; padding: 3px 8px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  .ask-choice:hover { border-color: var(--accent); color: var(--accent); }
+  .ask-custom-row { display: flex; gap: 4px; margin-top: 6px; }
+  .ask-custom-row[hidden] { display: none; }
+  #ask-custom-input { flex: 1; background: var(--input-bg); color: var(--fg); border: 1px solid var(--accent);
+                      border-radius: 3px; padding: 4px 6px; font-family: inherit; font-size: 12px; }
+  .ask-send { background: var(--accent); color: var(--bg); border: none; border-radius: 3px;
+              padding: 3px 10px; font-size: 12px; cursor: pointer; font-family: inherit; }
+
+  /* interaction card — approval / question (agent asked the human) */
+  #interact-card { padding: 8px 10px; background: rgba(128,128,128,.05); border-top: 1px solid var(--border); }
+  #interact-card[hidden] { display: none; }
+  .in-card { border: 1px solid var(--border); border-radius: 8px; background: var(--input-bg);
+             padding: 10px 12px; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .in-head { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+  .in-tag { font-size: 10px; padding: 1px 7px; border-radius: 8px; background: rgba(224,185,74,.18); color: #e0b94a;
+            flex: none; }
+  .in-tag.approval { background: rgba(244,76,76,.15); color: var(--err); }
+  .in-ctx { font-size: 12px; color: var(--fg); line-height: 1.5; word-break: break-word;
+            white-space: pre-wrap; margin: 4px 0 8px; }
+  .in-ctx .in-tool { color: var(--accent); font-weight: 600; }
+  .in-q { margin-bottom: 10px; }
+  .in-q:last-of-type { margin-bottom: 4px; }
+  .in-q .in-qtext { font-size: 13px; color: var(--fg); line-height: 1.5; margin-bottom: 2px; }
+  .in-q .in-qhead { display: flex; align-items: flex-start; gap: 8px; }
+  .in-q .in-qhead .in-qtext { flex: 1; }
+  .in-skip { flex: none; background: none; border: none; color: var(--muted); cursor: pointer;
+             font-size: 11px; padding: 2px 4px; border-radius: 4px; font-family: inherit; margin-top: -2px; }
+  .in-skip:hover { color: var(--accent); background: rgba(128,128,128,.08); }
+  .in-q.skipped .in-qtext { color: var(--muted); text-decoration: line-through; }
+  .in-q.skipped .in-opt { opacity: .45; pointer-events: none; }
+  .in-q.skipped .in-skip { color: var(--ok); }
+  .in-q .in-qheader { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px;
+                      margin-bottom: 2px; }
+  .in-q .in-qdetail { font-size: 11px; color: var(--muted); white-space: pre-wrap; margin-bottom: 6px; }
+  /* Options stack vertically — one option per full-width row; label + badge on
+     one line, description under it. Single-select shows a number chip, multi a
+     checkbox (mirrors the web question composer). */
+  .in-opts { display: flex; flex-direction: column; gap: 5px; }
+  .in-opt { display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left;
+            background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px;
+            padding: 6px 9px; font-size: 12px; line-height: 1.45; cursor: pointer; font-family: inherit; }
+  .in-opt:hover { border-color: var(--accent); }
+  .in-opt.sel { border-color: var(--accent); background: rgba(78,201,176,.07); }
+  .in-opt .in-num { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--border);
+                    display: inline-flex; align-items: center; justify-content: center; font-size: 11px;
+                    color: var(--muted); margin-top: 1px; }
+  .in-opt.sel .in-num { border-color: var(--accent); color: var(--accent); background: rgba(78,201,176,.1); }
+  .in-opt .in-check { flex: none; width: 16px; height: 16px; border-radius: 3px; border: 1px solid var(--border);
+                      display: inline-flex; align-items: center; justify-content: center; font-size: 11px;
+                      color: var(--bg); margin-top: 1px; }
+  .in-opt.sel .in-check { border-color: var(--accent); background: var(--accent); color: var(--bg); }
+  .in-opt .in-ocopy { flex: 1; min-width: 0; }
+  .in-opt .in-oline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .in-opt .in-olabel { word-break: break-word; }
+  .in-opt .in-badge { font-size: 10px; padding: 0 6px; border-radius: 8px; background: rgba(78,201,176,.16);
+                      color: var(--ok); flex: none; font-weight: 600; }
+  .in-opt .in-odesc { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; word-break: break-word; }
+  .in-actions { display: flex; gap: 6px; margin-top: 10px; align-items: center; }
+  .in-btn { background: var(--input-bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px;
+            padding: 5px 14px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  .in-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .in-btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+  .in-btn.primary:hover:not(:disabled) { filter: brightness(1.15); color: var(--accent-fg); }
+  .in-btn.danger { background: rgba(244,76,76,.12); color: var(--err); border-color: var(--err); }
+  .in-btn.danger:hover:not(:disabled) { background: rgba(244,76,76,.2); }
+  .in-btn:disabled { opacity: .4; cursor: default; }
+  .in-spacer { flex: 1; }
+  .in-custom-row { display: flex; gap: 6px; margin-top: 8px; align-items: center;
+                   border: 1px solid var(--border); border-radius: 6px; padding: 0 8px;
+                   background: var(--bg); }
+  .in-custom-row:focus-within { border-color: var(--accent); }
+  .in-custom-icon { flex: none; color: var(--muted); font-size: 12px; }
+  #in-custom-input { flex: 1; background: transparent; color: var(--fg); border: none;
+                     padding: 6px 0; font-family: inherit; font-size: 12px; outline: none; }
 </style>
 </head>
 <body>
   <header>
-    <span id="pill" class="pill off">○</span>
+    <span id="pill" class="pill off" title="DSH Bridge: 正在加载…"></span>
     <select id="session-select" title="切换会话"></select>
     <select id="model-select" title="切换模型" hidden></select>
+    <select id="effort-select" title="推理等级" hidden></select>
+    <select id="preset-select" title="权限预设" hidden></select>
     <button id="new-session" title="新会话">＋</button>
     <button id="delete-session" title="删除当前会话">🗑</button>
   </header>
@@ -228,6 +322,16 @@
       <button id="todo-toggle" title="展开/折叠任务">☑ 任务 <span class="tcount" id="todo-count"></span> <span id="todo-chevron">▸</span></button>
       <ul id="todo-list" hidden></ul>
     </section>
+    <section id="ask-card" hidden>
+      <div class="ask-head">✎ Ask DSH <button class="ask-close" id="ask-close" title="关闭">✕</button></div>
+      <div class="ask-ctx" id="ask-ctx"></div>
+      <div class="ask-choices" id="ask-choices"></div>
+      <div class="ask-custom-row" id="ask-custom-row" hidden>
+        <input id="ask-custom-input" placeholder="输入指令…（Enter 发送）" />
+        <button class="ask-send" id="ask-send">➤</button>
+      </div>
+    </section>
+    <section id="interact-card" hidden></section>
     <div id="input-row">
       <textarea id="input" rows="1" placeholder="发消息…（Enter 发送，运行中自动排队；Shift+Enter 换行；Ctrl+V 粘图片）"></textarea>
       <button id="send" class="btn primary" title="发送">➤</button>
@@ -241,10 +345,15 @@
   var vscode = acquireVsCodeApi();
   var $ = function (id) { return document.getElementById(id); };
   var messagesEl = $("messages"), pillEl = $("pill"), selEl = $("session-select"),
-      modelEl = $("model-select"), attachEl = $("attach-row"), queueEl = $("queue-row"),
+      modelEl = $("model-select"), effortEl = $("effort-select"), presetEl = $("preset-select"),
+      attachEl = $("attach-row"), queueEl = $("queue-row"),
       inputEl = $("input"), sendBtn = $("send"), cancelBtn = $("cancel"), statusEl = $("input-status"),
       todoBarEl = $("todo-bar"), todoToggleEl = $("todo-toggle"), todoListEl = $("todo-list"),
       todoCountEl = $("todo-count"), todoChevronEl = $("todo-chevron"),
+      askCardEl = $("ask-card"), askCtxEl = $("ask-ctx"), askChoicesEl = $("ask-choices"),
+      askCloseEl = $("ask-close"), askCustomRowEl = $("ask-custom-row"),
+      askCustomInputEl = $("ask-custom-input"), askSendEl = $("ask-send"),
+      interactEl = $("interact-card"),
       sentinelEl = $("history-sentinel");
 
   var state = {
@@ -256,6 +365,8 @@
     curAssistant: null, openBlocks: [],
     titles: {},
     models: null,            // { current: {provider, model}, groups: [...] }
+    presets: [],             // agent preset ids (agentPreset.list)
+    interact: null,          // pending interaction card {rpcId, kind, ...} | null
     usage: null,             // active session tokenUsage projection
     queue: [],               // session/queue snapshot for the active session
     commands: [],            // slash-command catalog (commands/list)
@@ -1637,14 +1748,37 @@
               var o = document.createElement("option");
               o.value = g.id + "|" + m.id;
               o.textContent = m.name;
-              if (msg.current && msg.current.provider === g.id && msg.current.model === m.id) o.selected = true;
               og.appendChild(o);
             });
             modelEl.appendChild(og);
           });
+          // Select the current model (append-then-set keeps this robust across
+          // DOM implementations).
+          if (msg.current && msg.current.provider && msg.current.model) {
+            modelEl.value = msg.current.provider + "|" + msg.current.model;
+          }
           modelEl.hidden = false;
         } else {
           modelEl.hidden = true;
+        }
+        renderEffortSelect();
+        break;
+      }
+      case "presets": {
+        state.presets = msg.items || [];
+        renderPresetSelect();
+        break;
+      }
+      case "interaction": {
+        renderInteraction(msg);
+        break;
+      }
+      case "interactionSettled": {
+        if (state.interact && state.interact.rpcId === msg.rpcId) {
+          state.interact = null;
+          interactEl.hidden = true;
+          interactState = null;
+          unlockMainInput();
         }
         break;
       }
@@ -1790,8 +1924,54 @@
       case "pickedFile":
         insertMention(msg.path);
         break;
+      case "ask":
+        showAskCard(msg);
+        break;
     }
   });
+
+  /* ---------- in-panel ask card ("ask about selection") ---------- */
+  function showAskCard(msg) {
+    askCtxEl.textContent = msg.context || "";
+    askChoicesEl.innerHTML = "";
+    (msg.choices || []).forEach(function (c) {
+      var b = document.createElement("button");
+      b.className = "ask-choice";
+      b.textContent = c.label;
+      b.title = c.detail || "";
+      b.addEventListener("click", function () {
+        if (c.id === "custom") {
+          askCustomRowEl.hidden = false;
+          askCustomInputEl.focus();
+        } else {
+          post({ type: "askPick", choiceId: c.id });
+          hideAskCard();
+        }
+      });
+      askChoicesEl.appendChild(b);
+    });
+    askCustomRowEl.hidden = true;
+    askCustomInputEl.value = "";
+    askCardEl.hidden = false;
+  }
+  function hideAskCard() {
+    askCardEl.hidden = true;
+    askCustomRowEl.hidden = true;
+  }
+  if (askCloseEl) askCloseEl.addEventListener("click", function () {
+    hideAskCard();
+    post({ type: "askCancel" });
+  });
+  if (askSendEl) askSendEl.addEventListener("click", sendAskCustom);
+  if (askCustomInputEl) askCustomInputEl.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAskCustom(); }
+  });
+  function sendAskCustom() {
+    var text = askCustomInputEl.value.trim();
+    if (!text) return;
+    post({ type: "askPick", choiceId: "custom", customText: text });
+    hideAskCard();
+  }
 
   /* ---------- @ mention: drill-down directory menu above the input ---------- */
   var mentionTimer = null;
@@ -1994,15 +2174,15 @@
     var s = state.sessions.find(function (x) { return x.sessionId === state.activeSessionId; });
     if (state.connected) {
       pillEl.className = "pill " + (state.running ? "busy" : "on");
-      pillEl.textContent = state.running ? "● 运行中" : "● 已连接";
-      pillEl.title = "harness v" + (state.version || "?");
+      pillEl.textContent = "";
+      pillEl.title = (state.running ? "运行中" : "已连接") + " · harness v" + (state.version || "?");
     } else if (state.phase === "offline") {
       pillEl.className = "pill off";
-      pillEl.textContent = "○ 离线";
-      pillEl.title = "DSH Bridge: no harness reachable";
+      pillEl.textContent = "";
+      pillEl.title = "DSH Bridge: 未连接 harness";
     } else {
       pillEl.className = "pill loading";
-      pillEl.textContent = "○";
+      pillEl.textContent = "";
       pillEl.title = "DSH Bridge: 正在加载…";
     }
     selEl.innerHTML = "";
@@ -2018,8 +2198,321 @@
       selEl.appendChild(opt);
     });
     cancelBtn.hidden = !state.running;
+    // Composer takeover: while an interaction is pending the main input row is
+    // hidden entirely (regardless of connectivity changes).
+    if (inputRowEl) inputRowEl.hidden = !!state.interact;
     sendBtn.disabled = !state.connected;
     updateStatusLine();
+  }
+
+  /* ---------- reasoning-effort + agent-preset selects ---------- */
+  // The effort list is model-dependent (upstream catalog: current.reasoningEffort
+  // + the model's advertised efforts); when the model changes we re-render it
+  // from the latest catalog snapshot. Presets come from agentPreset.list (real
+  // availability, matches the web GUI).
+  var effortOptions = ["low", "medium", "high"];
+  function renderEffortSelect() {
+    if (!state.models || !state.models.current) { effortEl.hidden = true; return; }
+    var cur = state.models.current.reasoningEffort;
+    var opts = effortOptions;
+    if (cur && opts.indexOf(cur) === -1) opts = opts.concat([cur]);
+    effortEl.innerHTML = "";
+    opts.forEach(function (e) {
+      var o = document.createElement("option");
+      o.value = e;
+      o.textContent = e;
+      effortEl.appendChild(o);
+    });
+    // Select the current effort (defaults to the first option when unknown).
+    effortEl.value = cur && opts.indexOf(cur) !== -1 ? cur : opts[0];
+    effortEl.hidden = false;
+  }
+  function renderPresetSelect() {
+    var presets = state.presets || [];
+    if (!presets.length) { presetEl.hidden = true; return; }
+    var act = state.sessions.find(function (x) { return x.sessionId === state.activeSessionId; });
+    var cur = act && act.agentPreset;
+    presetEl.innerHTML = "";
+    var ph = document.createElement("option");
+    ph.value = "";
+    ph.textContent = "权限: " + (cur || "默认");
+    ph.selected = true;
+    ph.disabled = true;
+    presetEl.appendChild(ph);
+    presets.forEach(function (p) {
+      var o = document.createElement("option");
+      o.value = p;
+      o.textContent = p;
+      if (cur && p === cur) o.selected = true;
+      presetEl.appendChild(o);
+    });
+    presetEl.hidden = false;
+  }
+
+  /* ---------- interaction card (approval / question from the agent) ---------- */
+  var interactState = null; // {kind, rpcId, sessionId, approvalId?, selections: {qid:Set}, custom: string}
+  var inputRowEl = $("input-row");
+  // Composer takeover: while an interaction is pending the MAIN input row is
+  // HIDDEN entirely — a stray user can't send a message instead of answering
+  // (mirrors the web composer replacing the input seat; hiding beats disabling
+  // because there is nothing left to click or type).
+  function lockMainInput() {
+    if (inputRowEl) inputRowEl.hidden = true;
+    if (attachEl) attachEl.hidden = true;
+  }
+  function unlockMainInput() {
+    if (inputRowEl) inputRowEl.hidden = false;
+    renderAttachments(); // restores attach-row visibility per current attachments
+    sendBtn.disabled = !state.connected;
+    inputEl.disabled = false;
+    inputEl.placeholder = "发消息…（Enter 发送，运行中自动排队；Shift+Enter 换行；Ctrl+V 粘图片）";
+  }
+  // Split the conventional recommendation suffix WITHOUT changing the answer
+  // value: a label ending in (推荐)/(recommended)（推荐）（recommended） renders
+  // with a "推荐" badge and the suffix stripped; the selected value keeps the
+  // original label (mirrors the web question composer).
+  function parseRecommendedLabel(label) {
+    var m = /\s*(?:\((?:recommended|推荐)\)|（(?:recommended|推荐)）)\s*$/i.exec(label);
+    return m
+      ? { label: label.slice(0, m.index), recommended: true }
+      : { label: label, recommended: false };
+  }
+  // Update submit/skip enablement: enabled once at least one answer exists
+  // (any selection, custom text, or an explicit skip), disabled otherwise
+  // (mirrors web composer).
+  function updateInteractionButtons() {
+    var st = interactState;
+    if (!st) return;
+    var hasAnswer = false;
+    if (st.kind === "question") {
+      for (var qi in st.selections) {
+        if (st.selections[qi].size > 0) { hasAnswer = true; break; }
+      }
+      if (!hasAnswer && st.custom && st.custom.trim()) hasAnswer = true;
+      if (!hasAnswer && st.skipped) {
+        for (var sq in st.skipped) { if (st.skipped[sq]) { hasAnswer = true; break; } }
+      }
+    } else {
+      hasAnswer = true; // approval: buttons are always actionable
+    }
+    var submitBtn = $("in-submit");
+    if (submitBtn) submitBtn.disabled = !hasAnswer;
+  }
+  function renderInteraction(msg) {
+    state.interact = msg;
+    var inner = "";
+    if (msg.kind === "approval") {
+      inner = '<div class="in-card">' +
+        '<div class="in-head"><span class="in-tag approval">审批</span> ' +
+        esc(msg.toolName || "工具") + '</div>' +
+        '<div class="in-ctx">' + (msg.reason ? esc(msg.reason) : "agent 请求执行此操作") + '</div>' +
+        '<div class="in-actions">' +
+        '<button class="in-btn primary" id="in-allow">允许一次</button>' +
+        '<button class="in-btn danger" id="in-reject">拒绝</button>' +
+        '</div></div>';
+    } else {
+      var isReview = msg.questions.some(function (q) { return q.intent && q.intent.kind === "plan-review"; });
+      var tag = isReview ? '<span class="in-tag">计划审批</span>' : '<span class="in-tag">选择题</span>';
+      inner = '<div class="in-card"><div class="in-head">' + tag + ' agent 向你提问</div>';
+      msg.questions.forEach(function (q, qi) {
+        inner += '<div class="in-q" data-qi="' + qi + '">' +
+          '<div class="in-qhead"><div class="in-qtext">' + esc(q.question) + '</div>' +
+          '<button class="in-skip" data-qi="' + qi + '" title="跳过此题">跳过</button></div>' +
+          (q.header ? '<div class="in-qheader">' + esc(q.header) + '</div>' : "") +
+          (q.detail ? '<div class="in-qdetail">' + esc(q.detail) + '</div>' : "") +
+          '<div class="in-opts">' +
+          (q.options || []).map(function (o, oi) {
+            var disp = parseRecommendedLabel(o.label);
+            var chip = q.multiSelect
+              ? '<span class="in-check">✓</span>'
+              : '<span class="in-num">' + (oi + 1) + '</span>';
+            return '<button class="in-opt" data-qi="' + qi + '" data-oi="' + oi + '">' + chip +
+              '<span class="in-ocopy"><span class="in-oline">' +
+              '<span class="in-olabel">' + esc(disp.label) + '</span>' +
+              (disp.recommended ? '<span class="in-badge">推荐</span>' : "") +
+              '</span>' +
+              (o.description ? '<span class="in-odesc">' + esc(o.description) + '</span>' : "") +
+              '</span></button>';
+          }).join("") +
+          '</div>' +
+          '</div>';
+      });
+      inner += '<div class="in-custom-row" id="in-custom-row">' +
+        '<span class="in-custom-icon">✎</span>' +
+        '<input id="in-custom-input" placeholder="自定义回答…（可选）" /></div>' +
+        '<div class="in-actions">' +
+        '<button class="in-btn primary" id="in-submit" disabled>提交</button>' +
+        '<span class="in-spacer"></span>' +
+        '<button class="in-btn" id="in-cancel">取消</button>' +
+        '</div></div>';
+    }
+    interactEl.innerHTML = inner;
+    interactEl.hidden = false;
+    interactState = {
+      kind: msg.kind, rpcId: msg.rpcId, sessionId: msg.sessionId,
+      approvalId: msg.approvalId || null,
+      selections: {}, custom: "", skipped: {}
+    };
+    lockMainInput(); // composer takeover while the question is pending
+    // wire the buttons
+    var allowBtn = $("in-allow");
+    if (allowBtn) allowBtn.addEventListener("click", function () { answerInteraction({ outcome: "allowed-once" }); });
+    var rejectBtn = $("in-reject");
+    if (rejectBtn) rejectBtn.addEventListener("click", function () { answerInteraction({ outcome: "rejected" }); });
+    var submitBtn = $("in-submit");
+    if (submitBtn) submitBtn.addEventListener("click", function () { answerInteraction({ submit: true }); });
+    var cancelBtn2 = $("in-cancel");
+    if (cancelBtn2) cancelBtn2.addEventListener("click", function () {
+      state.interact = null; interactEl.hidden = true; interactState = null;
+      unlockMainInput();
+    });
+    // skip per question (web composer: skipped questions answer with
+    // {id, selected:[]} — the asker decides how to treat a skip)
+    interactEl.querySelectorAll(".in-skip").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var qi = b.dataset.qi;
+        var skipped = interactState.skipped[qi];
+        if (skipped) {
+          // un-skip
+          delete interactState.skipped[qi];
+          b.textContent = "跳过";
+          var qEl = interactEl.querySelector('.in-q[data-qi="' + qi + '"]');
+          if (qEl) qEl.classList.remove("skipped");
+        } else {
+          interactState.skipped[qi] = true;
+          var sel = interactState.selections[qi];
+          if (sel) sel.clear();
+          var qEl2 = interactEl.querySelector('.in-q[data-qi="' + qi + '"]');
+          if (qEl2) {
+            qEl2.classList.add("skipped");
+            qEl2.querySelectorAll(".in-opt").forEach(function (x) { x.classList.remove("sel"); });
+          }
+          b.textContent = "取消跳过";
+        }
+        updateInteractionButtons();
+      });
+    });
+    // option toggling (single vs multi) + submit enablement.
+    // custom-answer history is declared first so the option pick (which clears
+    // the input) can remember the draft BEFORE wiping it.
+    var cust = $("in-custom-input");
+    var custHistory = [], custHistoryIndex = -1, custHistoryDraft = "";
+    var rememberCustom = function () {
+      var v = cust ? cust.value.trim() : "";
+      if (v && custHistory[custHistory.length - 1] !== v) custHistory.push(v);
+      if (custHistory.length > 200) custHistory.shift();
+    };
+    var applyCustom = function (v) {
+      if (!cust) return;
+      cust.value = v;
+      interactState.custom = v;
+      // single-select: a non-empty custom answer clears the picked option
+      // (web composer: draftCustom() sets selected:[] for non-multi)
+      var q = msg.questions[0];
+      if (v.trim() !== "" && q && !q.multiSelect) {
+        var sel = interactState.selections["0"];
+        if (sel) {
+          sel.clear();
+          interactEl.querySelectorAll('.in-opt[data-qi="0"]').forEach(function (x) { x.classList.remove("sel"); });
+        }
+      }
+      updateInteractionButtons();
+    };
+    interactEl.querySelectorAll(".in-opt").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var qi = b.dataset.qi, oi = b.dataset.oi;
+        var q = msg.questions[Number(qi)];
+        var sel = interactState.selections[qi] || (interactState.selections[qi] = new Set());
+        if (sel.has(oi)) { sel.delete(oi); b.classList.remove("sel"); }
+        else {
+          if (!q.multiSelect) {
+            // remember the custom draft before the pick wipes it, so ↑ can
+            // bring it back if the user changes their mind
+            rememberCustom();
+            sel.clear();
+            interactEl.querySelectorAll('.in-opt[data-qi="' + qi + '"]').forEach(function (x) { x.classList.remove("sel"); });
+            // single-select picking an option clears the custom answer
+            // (web composer: choose() sets selected:[label], custom:"")
+            interactState.custom = "";
+            if (cust) cust.value = "";
+          }
+          sel.add(oi); b.classList.add("sel");
+        }
+        updateInteractionButtons();
+      });
+    });
+    if (cust) {
+      // CLI-style ↑/↓ history for the custom answer: every committed input
+      // pushes the previous value, so arrow keys can always bring earlier
+      // drafts back (e.g. after an option pick cleared the field) instead of
+      // forcing a retype. Same UX as the main input's history.
+      var lastCustomValue = "";
+      cust.addEventListener("input", function () {
+        var prev = lastCustomValue;
+        lastCustomValue = cust.value;
+        // push the previous value once per edit burst (skip if unchanged)
+        if (prev !== cust.value && prev.trim() !== "" && custHistory[custHistory.length - 1] !== prev) {
+          custHistory.push(prev);
+          if (custHistory.length > 200) custHistory.shift();
+        }
+        applyCustom(cust.value);
+      });
+      cust.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowUp" && custHistory.length > 0) {
+          e.preventDefault();
+          if (custHistoryIndex === -1) { custHistoryDraft = cust.value; custHistoryIndex = 0; }
+          else custHistoryIndex = Math.min(custHistoryIndex + 1, custHistory.length - 1);
+          applyCustom(custHistory[custHistory.length - 1 - custHistoryIndex]);
+          return;
+        }
+        if (e.key === "ArrowDown") {
+          if (custHistoryIndex === -1) return; // not navigating yet
+          e.preventDefault();
+          custHistoryIndex--;
+          applyCustom(custHistoryIndex === -1 ? custHistoryDraft : custHistory[custHistory.length - 1 - custHistoryIndex]);
+          return;
+        }
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+          e.preventDefault();
+          rememberCustom();
+          answerInteraction({ submit: true });
+        }
+      });
+    }
+    updateInteractionButtons();
+  }
+  function answerInteraction(ans) {
+    var st = interactState;
+    if (!st) return;
+    if (ans.outcome) {
+      post({ type: "respondApproval", rpcId: st.rpcId, sessionId: st.sessionId, approvalId: st.approvalId, outcome: ans.outcome });
+    } else if (ans.submit) {
+      var answers = [];
+      // build from the message's questions (keep original order)
+      var qs = state.interact && state.interact.questions || [];
+      qs.forEach(function (q, qi) {
+        // skipped question: empty answer (web composer sends {id, selected:[]})
+        if (st.skipped && st.skipped[qi]) {
+          answers.push({ id: q.id, selected: [] });
+          return;
+        }
+        var selSet = st.selections[qi];
+        var selected = selSet ? Array.from(selSet).map(function (oi) {
+          var o = q.options[Number(oi)];
+          return o ? o.label : "";
+        }).filter(Boolean) : [];
+        var custom = (st.custom || "").trim();
+        // Web composer semantics: on a single-select, a custom answer REPLACES
+        // the picked option (selected:[], custom); multi-select keeps both.
+        if (custom !== "" && q.multiSelect !== true) selected = [];
+        if (selected.length || custom) answers.push({ id: q.id, selected: selected, ...(custom ? { custom } : {}) });
+      });
+      post({ type: "respondQuestion", rpcId: st.rpcId, sessionId: st.sessionId, answers: answers });
+    }
+    state.interact = null;
+    interactEl.hidden = true;
+    interactState = null;
+    unlockMainInput(); // composer released
   }
 
   /* ---------- metrics line under the input (mirrors the DSH web StatsLine) ---------- */
@@ -2172,6 +2665,19 @@
     var i = v.indexOf("|");
     post({ type: "selectModel", provider: v.slice(0, i), model: v.slice(i + 1) });
   });
+  effortEl.addEventListener("change", function () {
+    var v = effortEl.value;
+    var mv = modelEl.value;
+    if (!v || !mv) return;
+    var i = mv.indexOf("|");
+    post({ type: "selectModel", provider: mv.slice(0, i), model: mv.slice(i + 1), reasoningEffort: v });
+  });
+  presetEl.addEventListener("change", function () {
+    var v = presetEl.value;
+    if (v) post({ type: "selectPreset", agentPreset: v });
+  });
+  // Pull the agent-preset list once the panel is live (header select).
+  post({ type: "getPresets" });
 
   /* ---------- image attachments (Ctrl+V paste) ---------- */
   var attachments = [];

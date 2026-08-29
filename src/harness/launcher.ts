@@ -63,9 +63,35 @@ export function readPidRecord(): HarnessPidRecord | null {
   }
 }
 
-/** Whether our spawned harness child is still alive. */
+/**
+ * Whether the harness is "ours" and still alive.
+ *
+ * Two sources of truth:
+ * 1. The live ChildProcess handle (`child`) — set when THIS module spawned it.
+ * 2. The persistent pid record (`%TEMP%\dsh-vsc-harness.pid`) — survives
+ *    extension reloads, where `child` is wiped (module re-import) but the
+ *    detached instance we spawned keeps running.
+ *
+ * After a reload the pid record is the ONLY proof an instance is ours; without
+ * this fallback `dsh.stop` / deactivate would say "not ours" and leave an
+ * orphan harness on the port forever (observed in deactivate logs: owned=false
+ * with a live pid record).
+ */
 export function isRunning(): boolean {
-  return child !== undefined && child.exitCode === null;
+  if (child !== undefined && child.exitCode === null) return true;
+  return isPidRecordAlive();
+}
+
+/** True when the pid record names a process that is still alive. */
+function isPidRecordAlive(): boolean {
+  const rec = readPidRecord();
+  if (!rec || rec.pid <= 0) return false;
+  try {
+    process.kill(rec.pid, 0); // signal 0 = existence probe, no side effects
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -251,15 +277,33 @@ export async function startHarness(port: number, log: vscode.OutputChannel): Pro
 }
 
 /** Kill the auto-started harness (and its whole process tree). Only ever
- *  touches the process THIS extension spawned; a pre-existing/shared harness
- *  is never killed. Resolves with what actually happened. */
+ *  touches the process THIS extension spawned (live handle, or the pid record
+ *  left behind by a previous session after an extension reload); a
+ *  pre-existing/shared harness is never killed. Resolves with what actually
+ *  happened. */
 export function stopHarness(): Promise<{ killed: boolean; pid?: number; error?: string }> {
-  if (!child || child.exitCode !== null) {
+  let pid: number | undefined;
+  if (child !== undefined && child.exitCode === null) {
+    pid = child.pid;
+    child = undefined;
+  } else {
+    // Reload case: `child` was wiped but the pid record may still name the
+    // instance we spawned. Adopt it (if the process is still alive) so the
+    // orphan can be cleaned up.
+    const rec = readPidRecord();
+    if (rec && rec.pid > 0) {
+      try {
+        process.kill(rec.pid, 0);
+        pid = rec.pid;
+      } catch {
+        /* record is stale — process already dead */
+      }
+    }
+  }
+  if (pid === undefined) {
     clearPidRecord();
     return Promise.resolve({ killed: false });
   }
-  const pid = child.pid;
-  child = undefined;
   return new Promise((resolve) => {
     execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, (error) => {
       clearPidRecord();

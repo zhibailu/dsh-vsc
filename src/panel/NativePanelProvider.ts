@@ -5,6 +5,7 @@ import { HarnessClient } from "../harness/client";
 import type { PromptContentPart, QueueAction } from "../harness/protocol";
 import type { HostMessage, PanelEvent, PanelSession, TodoItem, ToolLineDiff, WebviewMessage } from "./protocol";
 import { countMetaDiff, countToolArgsDiff } from "../editor/diffCount";
+import { INTENT_CHOICES, sendAsk } from "../editor/askSelection";
 
 /**
  * Phase 1 — native sidebar chat panel.
@@ -31,6 +32,8 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
    */
   private pendingArgs = new Map<string, { name: string; args: Record<string, unknown>; path?: string }>();
   private readonly maxPendingArgs = 400;
+  /** Context block of a pending in-panel ask card (set by showAskCard). */
+  private askContext: string | null = null;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -91,6 +94,17 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       } else if (event.type === "tool/result") {
         this.handleToolResultDiff(sessionId, event);
       }
+      // Answerable interaction frames (approval/requested, question/requested)
+      // carry their envelope rpcId — forward them as a dedicated interaction
+      // message so the panel can render a decision card and answer via
+      // /api/respond (the raw event is ALSO posted below; the panel ignores
+      // it for interaction kinds). Settled frames close the card.
+      if (event.type === "approval/requested" || event.type === "question/requested") {
+        this.handleInteraction(sessionId, event);
+      } else if (event.type === "approval/resolved" || event.type === "question/resolved") {
+        const rpcId = event.rpcId ?? "";
+        if (rpcId) this.post({ type: "interactionSettled", sessionId, rpcId });
+      }
       this.post({ type: "event", sessionId, event });
     });
     // Keep the @ file index fresh.
@@ -116,6 +130,18 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     this.postState();
   }
 
+  /**
+   * Show an in-panel "ask about selection" card (preferred path for
+   * dsh.askSelection): the editor context block is rendered inside the
+   * sidebar with the intent choices, so the whole flow stays in the panel
+   * instead of a VS Code quick-pick. The pick is answered via askPick /
+   * askCancel and shipped by sendAsk().
+   */
+  showAskCard(contextBlock: string): void {
+    this.askContext = contextBlock;
+    this.post({ type: "ask", context: contextBlock, choices: INTENT_CHOICES });
+  }
+
   async refresh(): Promise<void> {
     if (!this.client) {
       this.post({ type: "state", connected: false, sessions: [], activeSessionId: null });
@@ -139,6 +165,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           usage: item.projections?.values?.tokenUsage ?? undefined,
           stats: item.projections?.values?.sessionStats ?? undefined,
           context: item.projections?.values?.contextPressure ?? undefined,
+          agentPreset: item.agentPreset,
         }))
         .sort((a, b) => b.updatedAt - a.updatedAt);
       // A freshly created session is blank until its first prompt; keep it
@@ -153,6 +180,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           usage: undefined,
           stats: undefined,
           context: undefined,
+          agentPreset: undefined,
         });
       }
       this.sessions = sessions;
@@ -164,6 +192,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         await this.loadHistory(this.activeSessionId, undefined);
         await this.postModels();
         await this.postCommands();
+        await this.postPresets();
       }
     } catch (error) {
       this.post({ type: "error", message: `会话列表失败: ${(error as Error).message}` });
@@ -220,6 +249,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         await this.loadHistory(message.sessionId, undefined);
         await this.postModels();
         await this.postCommands();
+        await this.postPresets();
         break;
       case "getModels":
         await this.postModels();
@@ -227,7 +257,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       case "selectModel": {
         if (!this.activeSessionId) break;
         try {
-          await this.client.selectModel(this.activeSessionId, message.provider, message.model);
+          await this.client.selectModel(this.activeSessionId, message.provider, message.model, message.reasoningEffort);
           await this.postModels();
         } catch (error) {
           this.post({ type: "error", message: `切换模型失败: ${(error as Error).message}` });
@@ -262,6 +292,79 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           (error) => this.post({ type: "error", message: `复制失败: ${(error as Error).message}` })
         );
         break;
+      case "askPick": {
+        const context = this.askContext;
+        this.askContext = null;
+        if (!context || !this.client) {
+          this.post({ type: "error", message: "Ask 卡片已失效，请重新选中代码再试。" });
+          break;
+        }
+        const choice = INTENT_CHOICES.find((c) => c.id === message.choiceId);
+        let instruction: string;
+        if (choice && choice.id !== "custom") {
+          instruction = choice.label;
+        } else {
+          const custom = (message.customText ?? "").trim();
+          if (!custom) {
+            this.post({ type: "error", message: "请输入指令。" });
+            break;
+          }
+          instruction = custom;
+        }
+        try {
+          await sendAsk(this.client, context, instruction);
+        } catch (error) {
+          this.post({ type: "error", message: `发送失败 — ${(error as Error).message}` });
+        }
+        break;
+      }
+      case "askCancel":
+        this.askContext = null;
+        break;
+      case "respondApproval": {
+        if (!this.client) {
+          this.post({ type: "error", message: "harness 未连接" });
+          break;
+        }
+        try {
+          await this.client.respond(message.rpcId, {
+            sessionId: message.sessionId,
+            approvalId: message.approvalId,
+            outcome: message.outcome,
+          });
+        } catch (error) {
+          this.post({ type: "error", message: `审批应答失败: ${(error as Error).message}` });
+        }
+        break;
+      }
+      case "respondQuestion": {
+        if (!this.client) {
+          this.post({ type: "error", message: "harness 未连接" });
+          break;
+        }
+        try {
+          await this.client.respond(message.rpcId, {
+            sessionId: message.sessionId,
+            answer: { answers: message.answers },
+          });
+        } catch (error) {
+          this.post({ type: "error", message: `选择题应答失败: ${(error as Error).message}` });
+        }
+        break;
+      }
+      case "getPresets":
+        await this.postPresets();
+        break;
+      case "selectPreset": {
+        if (!this.activeSessionId) break;
+        try {
+          await this.client.agentPresetSelect(this.activeSessionId, message.agentPreset);
+          await this.postPresets();
+        } catch (error) {
+          this.post({ type: "error", message: `切换权限预设失败: ${(error as Error).message}` });
+        }
+        break;
+      }
       case "openFile": {
         let abs = message.path;
         if (!path.isAbsolute(abs)) {
@@ -439,6 +542,60 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /**
+   * Forward an answerable interaction frame (approval/requested or
+   * question/requested) to the panel as a dedicated `interaction` message.
+   * The panel answers by echoing `rpcId` through respondApproval /
+   * respondQuestion; the host then calls /api/respond.
+   */
+  private handleInteraction(sessionId: string, event: PanelEvent): void {
+    const rpcId = event.rpcId;
+    if (!rpcId) return; // unreachable frame — cannot answer it
+    const data = (event.data ?? {}) as Record<string, unknown>;
+    if (event.type === "approval/requested") {
+      this.post({
+        type: "interaction",
+        sessionId,
+        rpcId,
+        kind: "approval",
+        approvalId: String(data.approvalId ?? ""),
+        toolName: String(data.toolName ?? ""),
+        callId: data.callId !== undefined ? String(data.callId) : undefined,
+        reason: data.reason !== undefined ? String(data.reason) : undefined,
+      });
+      return;
+    }
+    if (event.type === "question/requested") {
+      const raw = Array.isArray(data.questions) ? (data.questions as Record<string, unknown>[]) : [];
+      this.post({
+        type: "interaction",
+        sessionId,
+        rpcId,
+        kind: "question",
+        questions: raw.map((q) => ({
+          id: String(q.id ?? ""),
+          question: String(q.question ?? ""),
+          detail: q.detail !== undefined ? String(q.detail) : undefined,
+          header: q.header !== undefined ? String(q.header) : undefined,
+          multiSelect: q.multiSelect === true,
+          options: Array.isArray(q.options)
+            ? (q.options as Record<string, unknown>[]).map((o) => ({
+                label: String(o.label ?? ""),
+                description: o.description !== undefined ? String(o.description) : undefined,
+              }))
+            : undefined,
+          intent:
+            q.intent && typeof q.intent === "object"
+              ? {
+                  kind: String((q.intent as Record<string, unknown>).kind ?? ""),
+                  approve: String((q.intent as Record<string, unknown>).approve ?? ""),
+                }
+              : undefined,
+        })),
+      });
+    }
+  }
+
   /* ---------- bridge-computed per-tool line diffs ("+N-M") ---------- */
 
   /** Resolve a possibly-relative tool path against the first workspace root. */
@@ -577,6 +734,24 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     } catch (error) {
       // Model catalog is advisory; fail silently rather than spamming errors.
       this.log(`models: ${(error as Error).message}`);
+    }
+  }
+
+  private async postPresets(): Promise<void> {
+    if (!this.client) return;
+    try {
+      const { presets } = await this.client.agentPresetList();
+      const current = this.activeSessionId
+        ? this.sessions.find((s) => s.sessionId === this.activeSessionId)?.agentPreset
+        : undefined;
+      this.post({
+        type: "presets",
+        items: presets.map((p) => p.agentPreset),
+        current,
+      });
+    } catch (error) {
+      // Preset list is advisory; fail silently.
+      this.log(`presets: ${(error as Error).message}`);
     }
   }
 

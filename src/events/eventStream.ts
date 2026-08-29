@@ -7,6 +7,13 @@ export interface SessionEvent {
   /** Unix epoch ms stamped by the harness on every durable log entry. */
   time?: number;
   data?: Record<string, unknown>;
+  /**
+   * Wire envelope id of a server-request frame. Answerable frames
+   * (approval/requested, question/requested) must be answered by echoing
+   * this rpcId via /api/respond — it lives OUTSIDE the payload, so it is
+   * forwarded separately (never inside data).
+   */
+  rpcId?: string;
 }
 
 /**
@@ -59,12 +66,18 @@ export class HarnessEventStream implements vscode.Disposable {
   }
 
   private handleFrame(raw: unknown): void {
-    let frame: { payload?: unknown } | null = null;
+    let frame: { payload?: unknown; rpcId?: unknown } | null = null;
     try {
-      frame = JSON.parse(String(raw)) as { payload?: unknown };
+      frame = JSON.parse(String(raw)) as { payload?: unknown; rpcId?: unknown };
     } catch {
       return;
     }
+    // Mux frames are ServerRequest-shaped on the wire:
+    //   { type:"server-request", rpcId, method, payload:{...} }
+    // Answerable frames (approval/requested, question/requested) need the
+    // envelope rpcId echoed back through /api/respond — surface it alongside
+    // the event so consumers can answer (never bury it in data).
+    const wireRpcId = typeof frame?.rpcId === "string" && frame.rpcId.length > 0 ? frame.rpcId : undefined;
     const inner = (frame && typeof frame === "object" && "payload" in frame ? frame.payload : frame) as {
       type?: string;
       sessionId?: unknown;
@@ -81,7 +94,7 @@ export class HarnessEventStream implements vscode.Disposable {
       const sessionId = String(inner.sessionId ?? "");
       const event = inner.event;
       if (sessionId && event && typeof event.type === "string") {
-        this.onSessionEvent(sessionId, event as SessionEvent);
+        this.onSessionEvent(sessionId, { ...(event as SessionEvent), rpcId: wireRpcId });
       }
       return;
     }
@@ -93,7 +106,7 @@ export class HarnessEventStream implements vscode.Disposable {
       const sessionId = String(inner.sessionId);
       if (sessionId) {
         const { sessionId: _sid, type, ...rest } = inner;
-        this.onSessionEvent(sessionId, { type, data: rest as Record<string, unknown> });
+        this.onSessionEvent(sessionId, { type, data: rest as Record<string, unknown>, rpcId: wireRpcId });
       }
     }
   }

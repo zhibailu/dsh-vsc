@@ -10,7 +10,7 @@ import { configuredBase, discover, portOf } from "./harness/discover";
 import { startHarness, stopHarness, isRunning as harnessRunning, readPidRecord, HARNESS_PID_FILE } from "./harness/launcher";
 import { HarnessEventStream } from "./events/eventStream";
 import { ChangeTracker } from "./editor/changeTracker";
-import { askSelection } from "./editor/askSelection";
+import { buildSelectionContext } from "./editor/askSelection";
 import { reviewFiles } from "./editor/diff";
 import type { PanelEvent } from "./panel/protocol";
 
@@ -86,7 +86,28 @@ export function activate(context: vscode.ExtensionContext): void {
       void refresh();
     }),
     vscode.commands.registerCommand("dsh.openWebView", () => openWebView(context, log)),
-    vscode.commands.registerCommand("dsh.askSelection", () => askSelection(() => client)),
+    vscode.commands.registerCommand("dsh.askSelection", () => {
+      // Preferred path: in-panel ask card (right sidebar). Falls back to the
+      // legacy quick-pick flow when the panel was never opened.
+      void (async () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || editor.selection.isEmpty) {
+          void vscode.window.showWarningMessage("DSH: 请先在编辑器里选中要询问的代码。");
+          return;
+        }
+        if (!client) {
+          const choice = await vscode.window.showWarningMessage("DSH: harness 未连接。", "启动 harness");
+          if (choice === "启动 harness") void vscode.commands.executeCommand("dsh.start");
+          return;
+        }
+        const block = await buildSelectionContext();
+        if (block === null) return;
+        // Focus the sidebar first so the card is visible, then post it.
+        void vscode.commands.executeCommand(`${RIGHT_VIEW}.focus`).then(() => {
+          panel.showAskCard(block);
+        });
+      })();
+    }),
     vscode.commands.registerCommand("dsh.reviewChanges", () => reviewFiles(tracker.latestFiles()))
   );
 

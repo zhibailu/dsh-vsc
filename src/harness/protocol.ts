@@ -112,6 +112,8 @@ export const METHODS = {
   workspaceArchiveSession: "workspace.archiveSession",
   commandsList: "commands/list",
   commandsExecute: "commands/execute",
+  agentPresetList: "agentPreset.list",
+  agentPresetSelect: "agentPreset.select",
 } as const;
 
 /** workspace.list / workspace.create row (DSH workspace domain view). */
