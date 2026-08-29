@@ -446,12 +446,26 @@
    *  Walks lines left to right and classifies each into:
    *   - fenced code block (``` ... ```)   -> <pre class='md-code'>
    *   - GFM table (header + |---| sep)    -> <table>
+   *   - ATX heading (# .. ######)         -> <div class='md-hN'>
    *   - ordinary text                     -> renderInline
+   *  Spacing rule (matches web markdown): BLOCK elements (pre/table/heading)
+   *  separate by their own margins — they emit NO trailing "\n" (the .body
+   *  is pre-wrap, so a bare newline after a block would double the gap into
+   *  a visible blank row). Text paragraphs separate by one "\n" between
+   *  adjacent text lines; a blank line between two TEXT lines is one "\n".
    *  Line-first ordering keeps a ``` inside a table cell from splitting the
    *  table, and a | inside a code block from faking a table. */
+  function isBlockAt(lines, idx) {
+    if (idx >= lines.length) return false;
+    var tl = lines[idx].trim();
+    if (tl.indexOf("```") === 0) return true;
+    if (tl.indexOf("|") !== -1 && idx + 1 < lines.length && isTableSeparator(lines[idx + 1])) return true;
+    return /^(#{1,6})\s+/.test(tl);
+  }
   function renderText(text) {
     var lines = String(text).split("\n");
     var out = "";
+    var lastKind = "none"; // last emitted: "text" | "block" | "none"
     var i = 0;
     while (i < lines.length) {
       var line = lines[i];
@@ -466,6 +480,7 @@
         var code = esc(buf.join("\n"));
         out += "<pre class='md-code'><code" + (lang ? " data-lang='" + esc(lang) + "'" : "") + ">" + code + "</code>"
              + "<button class='block-copy' title='复制代码'>⧉ 复制</button></pre>";
+        lastKind = "block";
         continue;
       }
       // GFM table: header + separator line
@@ -474,6 +489,7 @@
         i += 2;
         while (i < lines.length && lines[i].indexOf("|") !== -1) { rows.push(lines[i]); i++; }
         out += renderTable(rows);
+        lastKind = "block";
         continue;
       }
       // ATX heading: # .. ###### (web GUI renders the same)
@@ -481,12 +497,24 @@
       if (hm) {
         var lvl = hm[1].length;
         out += "<div class='md-h" + lvl + "'>" + renderInline(hm[2]) + "</div>";
+        lastKind = "block";
         i++;
-        if (i < lines.length) out += "\n";
         continue;
       }
-      // ordinary line
+      // blank line: paragraph gap ONLY between two text lines (blocks use margins)
+      if (t === "") {
+        var j = i;
+        while (j < lines.length && lines[j].trim() === "") j++;
+        if (lastKind === "text" && j < lines.length && !isBlockAt(lines, j)) out += "\n";
+        i = j;
+        continue;
+      }
+      // ordinary line: ends with "\n" whenever more lines follow (the blank
+      // line handler adds the SECOND "\n" between text paragraphs, so two
+      // text lines separated by an empty line render as one blank row —
+      // exactly like web markdown's <p> margins).
       out += renderInline(line);
+      lastKind = "text";
       i++;
       if (i < lines.length) out += "\n";
     }
