@@ -261,12 +261,13 @@ function logDeactivate(line: string): void {
  *
  * - Shared harness (not ours): never killed — the browser GUI or the user's
  *   own `dsh web` may be using it; we only note it stays alive.
- * - Auto-started harness (ours): ask host.describe for clientCount (patched
- *   DSH; see scripts/patch-dsh-client-count.ps1). If another client (e.g. a
- *   browser tab attached to our instance) is still connected, leave it
- *   running and log where its PID record lives. Otherwise (clientCount
- *   unknown because the patch is absent, or <= 1 = only us) stop it and
- *   remove the pid record, so no orphaned windowless dsh keeps running.
+ * - Auto-started harness (ours): ask host.describe for clientCount (provided
+ *   by the runtime overlay src/harness/overlay — in-memory patch, official
+ *   dsh files stay pristine). If another client (e.g. a browser tab attached
+ *   to our instance) is still connected, leave it running and log where its
+ *   PID record lives. Otherwise (clientCount unknown because the overlay
+ *   canary failed / overlay missing, or <= 1 = only us) stop it and remove
+ *   the pid record, so no orphaned windowless dsh keeps running.
  */
 export function deactivate(): Promise<void> {
   logDeactivate("deactivate called");
@@ -278,9 +279,9 @@ export function deactivate(): Promise<void> {
     return Promise.resolve();
   }
   // Ask the harness how many clients are attached. clientCount is
-  // undefined when the DSH patch is missing (zod strips unknown keys), so
-  // treat undefined as "no other client known" — the process is ours and
-  // windowless, an orphan is worse than stopping it.
+  // undefined when the runtime overlay is missing or its canary failed (zod
+  // strips unknown keys), so treat undefined as "no other client known" — the
+  // process is ours and windowless, an orphan is worse than stopping it.
   const probe = exitClient ?? new HarnessClient(configuredBase());
   let settled = false;
   let stopDone = Promise.resolve();

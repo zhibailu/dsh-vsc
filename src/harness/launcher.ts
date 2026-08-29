@@ -1,11 +1,27 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import * as vscode from "vscode";
+import { checkDshPristine } from "./overlay/pristine";
 
 let child: ChildProcess | undefined;
 let launcher: { node: string; script: string } | null = null;
+
+/**
+ * Runtime overlay (in-memory patch) entry: dist/overlay-register.mjs is
+ * bundled by esbuild (see esbuild.js) and injected into the harness process
+ * via NODE_OPTIONS=--import=<file-url>. It registers an ESM loader that
+ * applies the windowless + clientCount deltas to the module SOURCE as the
+ * harness loads it — the official dsh files on disk stay pristine (pure
+ * bridge; see src/harness/overlay/deltas.ts + internal/runtime-overlay.md).
+ */
+const OVERLAY_REGISTER = join(__dirname, "overlay-register.mjs");
+
+function overlayRegisterPath(): string | undefined {
+  return existsSync(OVERLAY_REGISTER) ? OVERLAY_REGISTER : undefined;
+}
 
 /**
  * Persistent record of the harness this extension auto-started, so a detached
@@ -53,16 +69,29 @@ export function isRunning(): boolean {
 }
 
 /**
- * Build the child env: inherit the parent, but ensure GITHUB_TOKEN is present.
- * The web profile fails the whole boot when GITHUB_TOKEN is missing (mcp-github
- * config becomes invalid), so fall back to the persistent Windows user env
- * when the process env lacks it (e.g. VS Code launched from a stale session).
+ * Build the child env: inherit the parent, but ensure GITHUB_TOKEN is present
+ * and inject the runtime overlay --import flag.
+ *
+ * The web profile fails the whole boot when GITHUB_TOKEN is missing
+ * (mcp-github config becomes invalid), so fall back to the persistent Windows
+ * user env when the process env lacks it (e.g. VS Code launched from a stale
+ * session).
+ *
+ * NODE_OPTIONS (not argv) is the injection mechanism on purpose: it applies
+ * to the top-level harness process AND any node child it may spawn, with one
+ * flag. The overlay register file lives in dist/ next to extension.js and is
+ * bundled into the vsix (dist/** is not in .vscodeignore).
  */
 async function resolveSpawnEnv(): Promise<NodeJS.ProcessEnv> {
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (!env.GITHUB_TOKEN) {
     const userToken = await readWindowsUserEnv("GITHUB_TOKEN");
     if (userToken) env.GITHUB_TOKEN = userToken;
+  }
+  const register = overlayRegisterPath();
+  if (register) {
+    const flag = `--import=${pathToFileURL(register).href}`;
+    env.NODE_OPTIONS = env.NODE_OPTIONS ? `${env.NODE_OPTIONS} ${flag}` : flag;
   }
   return env;
 }
@@ -180,6 +209,22 @@ export async function startHarness(port: number, log: vscode.OutputChannel): Pro
   if (!l) {
     log.appendLine("cannot resolve node/dsh for the silent launch — PATH missing `node` or the `dsh` shim; run `dsh web` manually for now");
     return;
+  }
+  // Runtime overlay status + official-body integrity (read-only, cheap).
+  const overlay = overlayRegisterPath();
+  log.appendLine(
+    overlay
+      ? `runtime overlay: on (${overlay} — in-memory clientCount + windowless patches; official dsh files untouched)`
+      : "runtime overlay: MISSING dist/overlay-register.mjs — clientCount/windowless patches NOT applied (rebuild the extension)"
+  );
+  const subRoot = join(dirname(dirname(l.script)), "node_modules", "@deepseek-ai");
+  const rep = checkDshPristine(subRoot);
+  if (rep.ok) {
+    log.appendLine(`dsh install integrity: pristine (${rep.pristine.length} official files byte-identical to npm release)`);
+  } else {
+    log.appendLine(
+      `dsh install integrity: NOT pristine — missing=[${rep.missing.join(", ")}] modified=[${rep.modified.join(", ")}] (run scripts/restore-dsh-pristine.ps1)`
+    );
   }
   const args = ["web", "--no-open", "--port", String(port)];
   log.appendLine(`$ ${l.node} ${l.script} ${args.join(" ")} (direct node, windowless, detached, shared ~/.dsh)`);

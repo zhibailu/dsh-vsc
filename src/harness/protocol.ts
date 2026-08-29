@@ -44,9 +44,10 @@ export interface HostDescription {
   canOpenPath: boolean;
   /**
    * Live consumers of /api/events.mux (each browser tab and each extension
-   * client counts as one; the caller's own stream is included). Added by
-   * scripts/patch-dsh-client-count.ps1 — absent when the patch is not applied
-   * (e.g. dsh updated but the patch not re-run). `undefined` = unknown.
+   * client counts as one; the caller's own stream is included). Added by the
+   * runtime overlay (src/harness/overlay — in-memory patch at harness load
+   * time; official dsh files stay pristine) — absent when the overlay is
+   * missing or its canary failed (e.g. dsh updated). `undefined` = unknown.
    */
   clientCount?: number;
 }
