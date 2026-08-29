@@ -10,7 +10,8 @@
 2. 安装（VS Code 里 Ctrl+Shift+P → **Install from VSIX**，或命令行）：
 
 ```bash
-code --install-extension dsh-vsc-0.1.0.vsix --force
+# 把 <版本号> 换成你下载的实际文件名
+code --install-extension dsh-vsc-<版本号>.vsix --force
 ```
 
 3. 重载窗口（Ctrl+Shift+P → **Reload Window**），左侧活动栏点 **DSH** 图标即可使用
@@ -24,7 +25,7 @@ git clone https://github.com/zhibailu/dsh-vsc.git
 cd dsh-vsc
 npm install
 npm run package     # esbuild 构建 + vsce 打包，产出 dsh-vsc-<版本号>.vsix
-code --install-extension dsh-vsc-0.1.0.vsix --force
+code --install-extension dsh-vsc-<版本号>.vsix --force
 ```
 
 ## 使用
