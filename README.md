@@ -59,7 +59,7 @@ code --install-extension dsh-vsc-0.1.0.vsix --force
   - **权限预设切换**：header 下拉，实时拉取 `agentPreset.list` 实际可用预设
   - 提问时**主输入栏整体隐藏**（composer takeover），防止误发消息
 
-## 边界（诚实版）
+## 边界
 
 - 不重写聊天 UI（嵌入真实前端）；不截断/白名单事件；不要求重输 API key
 - 不另起第二个 harness（发现到运行中的就复用，只有没有才自拉；关 VS Code 时若还有其他客户端连着，自拉实例会保留）
