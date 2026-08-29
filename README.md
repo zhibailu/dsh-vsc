@@ -33,7 +33,9 @@ code --install-extension dsh-vsc-0.1.0.vsix --force
 
 ![侧边栏概览](docs/screenshots/sidebar.png)
 
-![对话与工具动作](docs/screenshots/chat.png)
+![对话与工具动作（上）](docs/screenshots/chat0.png)
+
+![对话与工具动作（下）](docs/screenshots/chat1.png)
 
 ![编辑器右键 Ask DSH](docs/screenshots/ask-menu.png)
 
