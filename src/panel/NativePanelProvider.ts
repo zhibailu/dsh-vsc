@@ -8,6 +8,32 @@ import { countMetaDiff, countToolArgsDiff } from "../editor/diffCount";
 import { INTENT_CHOICES, sendAsk } from "../editor/askSelection";
 
 /**
+ * Display copy for the four shipped agent presets — the official zh text from
+ * the harness's config agent-presets preset.yml files (name + description),
+ * the same strings the DSH web GUI's preset picker shows for system presets.
+ * Used as a fallback so the ＋ mode dropdown renders official copy even when
+ * the roster entry carries no name/description; live roster wins when present.
+ */
+const OFFICIAL_PRESET_COPY: Record<string, { name: string; description: string }> = {
+  standard: {
+    name: "标准模式",
+    description: "功能完整的编码 Agent，支持文件编辑、Shell、文件与网页检索、Skills、计划、目标、子代理和工作流。",
+  },
+  code: {
+    name: "PTC 模式",
+    description: "具备标准模式的全部能力，并通过 Code Mode SDK 呈现工具，让模型用一个 TypeScript 程序组合多步操作。",
+  },
+  minimal: {
+    name: "极简模式",
+    description: "仅提供持久 bash 与 str_replace_editor 的双工具编码 Agent。",
+  },
+  cordis: {
+    name: "创造模式",
+    description: "用于创建自定义 Agent preset：具备标准模式的全部能力，并提供运行时检查、插件实验和 preset 创作指导。",
+  },
+};
+
+/**
  * Phase 1 — native sidebar chat panel.
  * Renders the conversation natively (VS Code themed), driven by the mux event
  * stream + session.history, with prompt via session.prompt. This replaces the
@@ -252,6 +278,8 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           await this.loadHistory(this.activeSessionId, undefined);
         }
         await this.buildFileIndex();
+        // Seed the ＋ mode dropdown with the agent-preset roster.
+        await this.postAgentPresets();
         break;
       case "selectSession":
         this.activeSessionId = message.sessionId;
@@ -280,7 +308,12 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       case "newSession": {
         try {
           const workspaceId = await this.resolveWorkspaceId();
-          const { sessionId } = await this.client.createSession(workspaceId ? { workspaceId } : {});
+          const opts: { workspaceId?: string; agentPreset?: string } = {};
+          if (workspaceId) opts.workspaceId = workspaceId;
+          // Optional mode pick: the panel sends agentPreset when the user chose
+          // one from the ＋ dropdown (标准 / PTC / 极简 / 创造 = agent presets).
+          if (message.agentPreset) opts.agentPreset = message.agentPreset;
+          const { sessionId } = await this.client.createSession(opts);
           this.activeSessionId = sessionId;
           await this.refresh();
         } catch (error) {
@@ -368,6 +401,9 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       case "getPermissions":
         this.postPermissions();
         break;
+      case "getAgentPresets":
+        await this.postAgentPresets();
+        break;
       case "selectPermission": {
         if (!this.activeSessionId) break;
         try {
@@ -408,6 +444,9 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         }
         break;
       }
+      case "openSettings":
+        this.openSettingsPanel();
+        break;
       case "queueSteer":
       case "queueRemove": {
         if (!this.activeSessionId) break;
@@ -796,6 +835,61 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  /** Push the agent-preset roster (＋ 新建会话的模式下拉) to the panel. Display
+   *  copy: the live roster's own name/description when present, otherwise the
+   *  official shipped copy for the four built-in presets. Roster order is the
+   *  host's (order field in preset.yml), so 标准/PTC/极简/创造 appear in the
+   *  dropdown in the official order. If the roster is empty or unreachable
+   *  (e.g. an older harness without the agent-presets domain), fall back to
+   *  the four shipped presets so the picker always offers the modes. */
+  private async postAgentPresets(): Promise<void> {
+    if (!this.client) return;
+    const officialRows = (presets: { id: string; name?: string; description?: string; isDefault?: boolean }[]) =>
+      presets.map((p) => {
+        const official = OFFICIAL_PRESET_COPY[p.id];
+        return {
+          id: p.id,
+          name: p.name ?? official?.name,
+          description: p.description ?? official?.description,
+          isDefault: p.isDefault === true,
+        };
+      });
+    try {
+      const { presets } = await this.client.agentPresetList();
+      const rows = presets
+        .filter((p) => p.broken === undefined)
+        .map((p) => {
+          const official = OFFICIAL_PRESET_COPY[p.id];
+          return {
+            id: p.id,
+            name: p.name ?? official?.name,
+            description: p.description ?? official?.description,
+            isDefault: p.isDefault === true,
+          };
+        });
+      if (rows.length === 0) {
+        // Empty roster: deployment composes no presets — fall back to the
+        // four shipped modes (the normal dsh deployment ships all four).
+        this.post({
+          type: "agentPresets",
+          presets: officialRows(
+            Object.keys(OFFICIAL_PRESET_COPY).map((id) => ({ id, isDefault: id === "standard" }))
+          ),
+        });
+        return;
+      }
+      this.post({ type: "agentPresets", presets: rows });
+    } catch (error) {
+      this.log(`agentPresets: ${(error as Error).message}`);
+      this.post({
+        type: "agentPresets",
+        presets: officialRows(
+          Object.keys(OFFICIAL_PRESET_COPY).map((id) => ({ id, isDefault: id === "standard" }))
+        ),
+      });
+    }
+  }
+
   private postState(): void {
     this.post({
       type: "state",
@@ -828,5 +922,107 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       /* keep the placeholder; the loading view degrades to text */
     }
     return html;
+  }
+
+  /* ---------- settings panel (editor-area tab, opened by the ⚙ button) ---------- */
+
+  private settingsPanel?: vscode.WebviewPanel;
+
+  /** Open (or reveal) the settings webview in the editor area — it behaves
+   *  like a normal file tab, not another sidebar view. Reads/writes ride the
+   *  settings domain (settings.describe / settings.mutate). */
+  private openSettingsPanel(): void {
+    if (this.settingsPanel) {
+      this.settingsPanel.reveal();
+      return;
+    }
+    const panel = vscode.window.createWebviewPanel(
+      "dsh.settings",
+      "DSH 设置",
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "dist", "media")],
+      }
+    );
+    this.settingsPanel = panel;
+    panel.onDidDispose(() => {
+      this.settingsPanel = undefined;
+    });
+    const settingsPath = vscode.Uri.joinPath(this.context.extensionUri, "dist", "media", "native", "settings.html");
+    panel.webview.html = fs.readFileSync(settingsPath.fsPath, "utf8");
+    panel.webview.onDidReceiveMessage((msg) => {
+      void this.onSettingsMessage(msg as Record<string, unknown>);
+    });
+  }
+
+  private async onSettingsMessage(msg: Record<string, unknown>): Promise<void> {
+    if (!this.client) {
+      this.postSettingsError("harness 未连接");
+      return;
+    }
+    switch (msg.type) {
+      case "settingsReady":
+        await this.postSettingsData();
+        await this.postSettingsPresets();
+        break;
+      case "settingsMutate": {
+        const ns = String(msg.ns ?? "");
+        const ops = Array.isArray(msg.ops) ? (msg.ops as { op: string; path?: string[]; value?: unknown }[]) : [];
+        const expectedRevision = typeof msg.expectedRevision === "number" ? msg.expectedRevision : undefined;
+        try {
+          await this.client.settingsMutate(
+            ns,
+            ops.map((o) =>
+              o.op === "set"
+                ? { op: "set" as const, path: o.path ?? [], value: o.value }
+                : { op: "unset" as const, path: o.path ?? [] }
+            ),
+            expectedRevision
+          );
+          this.postSettingsSaved("已保存");
+          await this.postSettingsData();
+        } catch (error) {
+          this.postSettingsError(`保存失败: ${(error as Error).message}`);
+        }
+        break;
+      }
+    }
+  }
+
+  private async postSettingsData(): Promise<void> {
+    if (!this.client) return;
+    try {
+      const value = await this.client.settingsDescribe();
+      this.settingsPanel?.webview.postMessage({ type: "settingsData", value });
+    } catch (error) {
+      this.postSettingsError(`读取配置失败: ${(error as Error).message}`);
+    }
+  }
+
+  private async postSettingsPresets(): Promise<void> {
+    if (!this.client) return;
+    try {
+      const value = await this.client.agentPresetList();
+      this.settingsPanel?.webview.postMessage({ type: "settingsAgentPresets", value });
+    } catch (error) {
+      this.postSettingsError(`读取预设失败: ${(error as Error).message}`);
+    }
+  }
+
+  private postSettingsSaved(message: string): void {
+    try {
+      void this.settingsPanel?.webview.postMessage({ type: "settingsSaved", message });
+    } catch {
+      /* panel disposed */
+    }
+  }
+
+  private postSettingsError(message: string): void {
+    try {
+      void this.settingsPanel?.webview.postMessage({ type: "settingsError", message });
+    } catch {
+      /* panel disposed */
+    }
   }
 }

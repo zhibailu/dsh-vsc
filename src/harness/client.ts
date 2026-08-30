@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { METHODS, type ClientRequest, type ServerResponse, type RpcError, type HostDescription, type HistoryPage, type ModelCatalog, type PromptContentPart, type QueueAction, type SessionSummary, type WorkspaceView } from "./protocol";
+import { METHODS, type ClientRequest, type ServerResponse, type RpcError, type HostDescription, type HistoryPage, type ModelCatalog, type PromptContentPart, type QueueAction, type SessionSummary, type SettingsDescribeView, type SettingsNamespaceView, type SettingsPathOp, type WorkspaceView } from "./protocol";
 
 /** A business-level RPC failure (result.ok === false). */
 export class RpcErrorResult extends Error {
@@ -182,5 +182,25 @@ export class HarnessClient {
     } catch {
       return null;
     }
+  }
+
+  /** All registered settings namespaces (redacted values + schemas). */
+  settingsDescribe(signal?: AbortSignal): Promise<SettingsDescribeView> {
+    return this.call<SettingsDescribeView>(METHODS.settingsDescribe, {}, signal);
+  }
+
+  /** Path-addressed edits to one namespace's user layer (optimistic revision
+   *  guard: a stale expectedRevision is refused rather than overwriting). */
+  settingsMutate(
+    ns: string,
+    ops: SettingsPathOp[],
+    expectedRevision?: number,
+    signal?: AbortSignal
+  ): Promise<SettingsNamespaceView> {
+    return this.call<SettingsNamespaceView>(
+      METHODS.settingsMutate,
+      { ns, ops, ...(expectedRevision !== undefined ? { expectedRevision } : {}) },
+      signal
+    );
   }
 }

@@ -35,6 +35,26 @@
   #new-session { flex: none; width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 2px;
                  background: transparent; color: var(--fg); cursor: pointer; }
   #new-session:hover { background: var(--input-bg); }
+  /* new-session mode picker: ＋ opens a dropdown of agent presets
+     (标准 / PTC / 极简 / 创造), each with hover explanation */
+  #new-session-wrap { position: relative; flex: none; }
+  #mode-menu { position: absolute; top: calc(100% + 4px); right: 0; min-width: 220px; max-width: 300px;
+               background: var(--vscode-quickInput-background, var(--input-bg)); color: var(--fg);
+               border: 1px solid var(--border); border-radius: 4px; z-index: 40; font-size: 12px;
+               box-shadow: 0 4px 12px rgba(0,0,0,.35); padding: 2px 0; }
+  #mode-menu[hidden] { display: none; }
+  .mode-item { padding: 5px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mode-item:hover { background: var(--vscode-list-activeSelectionBackground, #094771);
+                     color: var(--vscode-list-activeSelectionForeground, #ffffff); }
+  .mode-item .m-name { font-weight: 600; }
+  .mode-item .m-default { font-size: 10px; color: var(--muted); border: 1px solid var(--border);
+                          border-radius: 8px; padding: 0 5px; margin-left: 6px; }
+  .mode-item:hover .m-default { color: inherit; border-color: rgba(255,255,255,.35); }
+  .mode-empty { padding: 6px 10px; color: var(--muted); }
+  #mode-tip { position: fixed; z-index: 50; max-width: 280px; background: var(--vscode-editorWidget-background, var(--input-bg));
+              color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px;
+              font-size: 11px; line-height: 1.5; box-shadow: 0 4px 12px rgba(0,0,0,.35); white-space: pre-wrap; }
+  #mode-tip[hidden] { display: none; }
   #delete-session { flex: none; width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 2px;
                     background: transparent; color: var(--fg); cursor: pointer; font-size: 12px; line-height: 1; }
   #delete-session:hover { background: var(--input-bg); }
@@ -182,11 +202,16 @@
   .m-crumbs span:hover { color: var(--fg); text-decoration: underline; }
   .m-crumbs span.cur { color: var(--fg); cursor: default; }
   #input-status { font-size: 11px; color: var(--muted); min-height: 16px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #input-row { display: flex; gap: 6px; align-items: flex-end; }
+  #input-row { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
   #input-row[hidden] { display: none; } /* explicit display wins over [hidden]'s default; re-assert it */
-  #input { flex: 1; resize: none; background: var(--input-bg); color: var(--fg); border: 1px solid var(--border);
-           border-radius: 3px; padding: 6px 8px; font-family: inherit; font-size: 13px; max-height: 180px; }
+  #input { flex: none; resize: none; background: var(--input-bg); color: var(--fg); border: 1px solid var(--border);
+           border-radius: 3px; padding: 6px 8px; font-family: inherit; font-size: 13px;
+           max-height: 113px; overflow-y: auto; } /* 5 lines max, then the textarea scrolls */
   #input:focus { outline: 1px solid var(--accent); }
+  /* composer buttons live on their OWN row BELOW the textarea (mirrors the web
+     composer: the input seat is one level higher, buttons sit lower) — so a
+     multi-line input never crowds them */
+  #composer-btns { display: flex; gap: 6px; align-items: center; }
   .btn { width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 3px; background: transparent; color: var(--fg); cursor: pointer; flex: none; }
   .btn:hover { background: var(--input-bg); }
   .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
@@ -319,16 +344,41 @@
   .in-custom-icon { flex: none; color: var(--muted); font-size: 12px; }
   #in-custom-input { flex: 1; background: transparent; color: var(--fg); border: none;
                      padding: 6px 0; font-family: inherit; font-size: 12px; outline: none; }
+
+  /* composer popups (permission / model+effort) — slide up from the input row */
+  footer { position: relative; }
+  .combo-popup { position: absolute; z-index: 20; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,.35);
+    max-height: 264px; overflow-y: auto; font-size: 12px; min-width: 168px; }
+  #perm-menu { left: 6px; bottom: 44px; }
+  #model-menu { bottom: 44px; }
+  #effort-menu { bottom: 44px; }
+  .combo-popup .cp-title { padding: 4px 10px; color: var(--muted); font-size: 11px;
+                           border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }
+  .combo-popup .cp-row { padding: 4px 10px; cursor: pointer; white-space: nowrap;
+                         display: flex; gap: 6px; align-items: center; }
+  .combo-popup .cp-row:hover { background: rgba(128,128,128,.12); }
+  .combo-popup .cp-row.sel { color: var(--ok); font-weight: 600; }
+  .combo-popup .cp-row .cp-sub { color: var(--muted); font-size: 10px; margin-left: auto; }
+  #settings-btn { flex: none; width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 2px;
+                  background: transparent; color: var(--fg); cursor: pointer; font-size: 13px; line-height: 1; }
+  #settings-btn:hover { background: var(--input-bg); }
+  #perm-btn, #model-btn, #effort-btn { flex: none; border: 1px solid var(--border); border-radius: 3px;
+                          background: var(--input-bg); color: var(--fg); cursor: pointer;
+                          font-size: 11px; padding: 3px 8px; max-width: 128px;
+                          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #perm-btn:hover, #model-btn:hover, #effort-btn:hover { border-color: var(--accent); }
 </style>
 </head>
 <body>
   <header>
     <span id="pill" class="pill off" title="DSH Bridge: 正在加载…"></span>
     <select id="session-select" title="切换会话"></select>
-    <select id="model-select" title="切换模型" hidden></select>
-    <select id="effort-select" title="推理等级" hidden></select>
-    <select id="preset-select" title="权限预设" hidden></select>
-    <button id="new-session" title="新会话">＋</button>
+    <button id="settings-btn" title="设置（配置 harness）">⚙</button>
+    <div id="new-session-wrap">
+      <button id="new-session" title="新会话（选择模式）">＋</button>
+      <div id="mode-menu" hidden></div>
+    </div>
     <button id="delete-session" title="删除当前会话">🗑</button>
   </header>
   <main id="messages"><div id="history-sentinel"></div></main>
@@ -352,9 +402,18 @@
     <section id="interact-card" hidden></section>
     <div id="input-row">
       <textarea id="input" rows="1" placeholder="发消息…（Enter 发送，运行中自动排队；Shift+Enter 换行；Ctrl+V 粘图片）"></textarea>
-      <button id="send" class="btn primary" title="发送">➤</button>
-      <button id="cancel" class="btn" title="停止当前回合" hidden>✕</button>
+      <div id="composer-btns">
+        <button id="perm-btn" title="权限预设" hidden></button>
+        <div class="in-spacer"></div>
+        <button id="model-btn" title="模型" hidden></button>
+        <button id="effort-btn" title="推理等级" hidden></button>
+        <button id="send" class="btn primary" title="发送">➤</button>
+        <button id="cancel" class="btn" title="停止当前回合" hidden>✕</button>
+      </div>
     </div>
+    <div id="perm-menu" class="combo-popup" hidden></div>
+    <div id="model-menu" class="combo-popup" hidden></div>
+    <div id="effort-menu" class="combo-popup" hidden></div>
     <div id="input-status"></div>
   </footer>
 <script>
@@ -363,9 +422,10 @@
   var vscode = acquireVsCodeApi();
   var $ = function (id) { return document.getElementById(id); };
   var messagesEl = $("messages"), pillEl = $("pill"), selEl = $("session-select"),
-      modelEl = $("model-select"), effortEl = $("effort-select"), presetEl = $("preset-select"),
       attachEl = $("attach-row"), queueEl = $("queue-row"),
       inputEl = $("input"), sendBtn = $("send"), cancelBtn = $("cancel"), statusEl = $("input-status"),
+      permBtnEl = $("perm-btn"), modelBtnEl = $("model-btn"), effortBtnEl = $("effort-btn"), settingsBtnEl = $("settings-btn"),
+      permMenuEl = $("perm-menu"), modelMenuEl = $("model-menu"), effortMenuEl = $("effort-menu"),
       todoBarEl = $("todo-bar"), todoToggleEl = $("todo-toggle"), todoListEl = $("todo-list"),
       todoCountEl = $("todo-count"), todoChevronEl = $("todo-chevron"),
       askCardEl = $("ask-card"), askCtxEl = $("ask-ctx"), askChoicesEl = $("ask-choices"),
@@ -385,6 +445,7 @@
     models: null,            // { current: {provider, model}, groups: [...] }
     presets: [],             // permission presets (projections.permissions): [{value,label}]
     permCurrent: "",         // active session's current permission value
+    modes: [],               // agent presets for the ＋ mode picker: [{id,name,description,isDefault}]
     interact: null,          // pending interaction card {rpcId, kind, ...} | null
     usage: null,             // active session tokenUsage projection
     queue: [],               // session/queue snapshot for the active session
@@ -1701,35 +1762,19 @@
       }
       case "models": {
         state.models = msg;
-        modelEl.innerHTML = "";
-        if (msg.groups && msg.groups.length) {
-          msg.groups.forEach(function (g) {
-            var og = document.createElement("optgroup");
-            og.label = g.name || g.id;
-            g.models.forEach(function (m) {
-              var o = document.createElement("option");
-              o.value = g.id + "|" + m.id;
-              o.textContent = m.name;
-              og.appendChild(o);
-            });
-            modelEl.appendChild(og);
-          });
-          // Select the current model (append-then-set keeps this robust across
-          // DOM implementations).
-          if (msg.current && msg.current.provider && msg.current.model) {
-            modelEl.value = msg.current.provider + "|" + msg.current.model;
-          }
-          modelEl.hidden = false;
-        } else {
-          modelEl.hidden = true;
-        }
-        renderEffortSelect();
+        renderModelButton();
+        renderEffortButton();
         break;
       }
       case "permissions": {
         state.presets = msg.options || [];
         state.permCurrent = msg.current;
-        renderPresetSelect();
+        renderPermButton();
+        break;
+      }
+      case "agentPresets": {
+        state.modes = msg.presets || [];
+        if (modeMenuOpen) renderModeMenu();
         break;
       }
       case "interaction": {
@@ -2168,48 +2213,217 @@
     updateStatusLine();
   }
 
-  /* ---------- reasoning-effort + permission-preset selects ---------- */
-  // The effort list is model-dependent (upstream catalog: current.reasoningEffort
-  // + the model's advertised efforts); when the model changes we re-render it
-  // from the latest catalog snapshot. Presets come from the session's
-  // `permissions` projection (read-only / workspace-write / danger-full-access,
-  // matches the web GUI's 权限 select).
-  var effortOptions = ["low", "medium", "high"];
-  function renderEffortSelect() {
-    if (!state.models || !state.models.current) { effortEl.hidden = true; return; }
-    var cur = state.models.current.reasoningEffort;
-    var opts = effortOptions;
-    if (cur && opts.indexOf(cur) === -1) opts = opts.concat([cur]);
-    effortEl.innerHTML = "";
-    opts.forEach(function (e) {
-      var o = document.createElement("option");
-      o.value = e;
-      o.textContent = e;
-      effortEl.appendChild(o);
+  /* ---------- ＋ new-session mode picker (agent presets) ----------
+     Clicking ＋ opens a dropdown of the four modes (标准 / PTC / 极简 / 创造,
+     plus any user-authored presets); hovering an option shows the official
+     explanation; picking one creates the session with that agent preset. */
+  var modeMenuEl = $("mode-menu"), modeMenuOpen = false, modeTipEl = null;
+  function renderModeMenu() {
+    modeMenuEl.innerHTML = "";
+    var modes = state.modes || [];
+    if (!modes.length) {
+      var empty = document.createElement("div");
+      empty.className = "mode-empty";
+      empty.textContent = "正在加载模式…";
+      modeMenuEl.appendChild(empty);
+      post({ type: "getAgentPresets" });
+      return;
+    }
+    modes.forEach(function (m) {
+      var row = document.createElement("div");
+      row.className = "mode-item";
+      var name = document.createElement("span");
+      name.className = "m-name";
+      name.textContent = m.name || m.id;
+      row.appendChild(name);
+      if (m.isDefault) {
+        var badge = document.createElement("span");
+        badge.className = "m-default";
+        badge.textContent = "默认";
+        row.appendChild(badge);
+      }
+      row.addEventListener("mouseenter", function () { showModeTip(m.description || "", row); });
+      row.addEventListener("mouseleave", hideModeTip);
+      row.addEventListener("click", function () {
+        hideModeTip();
+        closeModeMenu();
+        post({ type: "newSession", agentPreset: m.id });
+      });
+      modeMenuEl.appendChild(row);
     });
-    // Select the current effort (defaults to the first option when unknown).
-    effortEl.value = cur && opts.indexOf(cur) !== -1 ? cur : opts[0];
-    effortEl.hidden = false;
   }
-  function renderPresetSelect() {
+  function showModeTip(text, rowEl) {
+    if (!text) { hideModeTip(); return; }
+    if (!modeTipEl) {
+      modeTipEl = document.createElement("div");
+      modeTipEl.id = "mode-tip";
+      document.body.appendChild(modeTipEl);
+    }
+    modeTipEl.textContent = text;
+    modeTipEl.hidden = false;
+    // Anchor beside the hovered row, clamped to the viewport.
+    var r = rowEl.getBoundingClientRect();
+    var w = modeTipEl.offsetWidth || 280;
+    var left = r.right + 8;
+    if (left + w > window.innerWidth - 4) left = Math.max(4, r.left - w - 8);
+    var top = Math.max(4, r.top);
+    modeTipEl.style.left = left + "px";
+    modeTipEl.style.top = top + "px";
+  }
+  function hideModeTip() {
+    if (modeTipEl) modeTipEl.hidden = true;
+  }
+  function openModeMenu() {
+    renderModeMenu();
+    modeMenuEl.hidden = false;
+    modeMenuOpen = true;
+  }
+  function closeModeMenu() {
+    modeMenuEl.hidden = true;
+    modeMenuOpen = false;
+    hideModeTip();
+  }
+  document.addEventListener("click", function (ev) {
+    if (!modeMenuOpen) return;
+    var t = ev.target;
+    if (t && t.closest && t.closest("#new-session-wrap")) return;
+    closeModeMenu();
+  });
+  document.addEventListener("keydown", function (ev) {
+    if (modeMenuOpen && ev.key === "Escape") closeModeMenu();
+  });
+
+  /* ---------- composer buttons: permission (left) + model/effort (right) ----------
+     The old header selects moved into the input row as two small buttons with
+     slide-up popups: perm-btn shows the current permission preset, model-btn
+     shows the current model and opens a two-section popup (models + reasoning
+     efforts). The top bar now holds only session select + settings + new/delete. */
+  var effortOptions = ["low", "medium", "high"];
+
+  function renderPermButton() {
     var presets = state.presets || [];
-    if (!presets.length) { presetEl.hidden = true; return; }
+    if (!presets.length) { permBtnEl.hidden = true; permBtnEl.textContent = ""; return; }
     var cur = state.permCurrent;
-    presetEl.innerHTML = "";
-    var ph = document.createElement("option");
-    ph.value = "";
-    ph.textContent = "权限: " + (cur || "默认");
-    ph.selected = true;
-    ph.disabled = true;
-    presetEl.appendChild(ph);
+    var label = "";
+    for (var i = 0; i < presets.length; i++) {
+      if (presets[i].value === cur) { label = presets[i].label || cur; break; }
+    }
+    if (!label) label = cur || "权限";
+    permBtnEl.textContent = label;
+    permBtnEl.hidden = false;
+    if (!permMenuEl.hidden) renderPermMenu();
+  }
+
+  function renderPermMenu() {
+    permMenuEl.innerHTML = "";
+    var presets = state.presets || [];
+    if (!presets.length) { permMenuEl.hidden = true; return; }
+    var cur = state.permCurrent;
+    var title = document.createElement("div");
+    title.className = "cp-title";
+    title.textContent = "权限预设";
+    permMenuEl.appendChild(title);
     presets.forEach(function (p) {
-      var o = document.createElement("option");
-      o.value = p.value;
-      o.textContent = p.label || p.value;
-      if (cur && p.value === cur) o.selected = true;
-      presetEl.appendChild(o);
+      var row = document.createElement("div");
+      row.className = "cp-row" + (cur === p.value ? " sel" : "");
+      row.textContent = p.label || p.value;
+      row.addEventListener("click", function () {
+        if (p.value !== cur) post({ type: "selectPermission", permission: p.value });
+        permMenuEl.hidden = true;
+      });
+      permMenuEl.appendChild(row);
     });
-    presetEl.hidden = false;
+  }
+
+  function renderModelButton() {
+    var cur = state.models && state.models.current;
+    var groups = (state.models && state.models.groups) || [];
+    if (!groups.length || !cur) { modelBtnEl.hidden = true; modelBtnEl.textContent = ""; return; }
+    // Prefer the catalog display name over the raw model id.
+    var label = cur.model || "模型";
+    for (var gi = 0; gi < groups.length; gi++) {
+      var g = groups[gi];
+      if (g.id === cur.provider) {
+        for (var mi = 0; mi < g.models.length; mi++) {
+          if (g.models[mi].id === cur.model) { label = g.models[mi].name || label; break; }
+        }
+        break;
+      }
+    }
+    modelBtnEl.textContent = label;
+    modelBtnEl.title = (cur.provider || "") + " / " + (cur.model || "") + (cur.reasoningEffort ? " / " + cur.reasoningEffort : "");
+    modelBtnEl.hidden = false;
+    if (!modelMenuEl.hidden) renderModelMenu();
+  }
+
+  function renderModelMenu() {
+    modelMenuEl.innerHTML = "";
+    var cur = state.models && state.models.current;
+    var groups = (state.models && state.models.groups) || [];
+    if (!groups.length) { modelMenuEl.hidden = true; return; }
+    var t1 = document.createElement("div");
+    t1.className = "cp-title";
+    t1.textContent = "模型";
+    modelMenuEl.appendChild(t1);
+    groups.forEach(function (g) {
+      g.models.forEach(function (m) {
+        var sel = !!(cur && cur.provider === g.id && cur.model === m.id);
+        var row = document.createElement("div");
+        row.className = "cp-row" + (sel ? " sel" : "");
+        row.textContent = m.name;
+        if (sel) {
+          var mark = document.createElement("span");
+          mark.className = "cp-sub";
+          mark.textContent = "✓";
+          row.appendChild(mark);
+        }
+        row.addEventListener("click", function () {
+          if (!sel) post({ type: "selectModel", provider: g.id, model: m.id });
+          modelMenuEl.hidden = true;
+        });
+        modelMenuEl.appendChild(row);
+      });
+    });
+  }
+
+  /* reasoning-effort button: its own popup, right of the model button */
+  function renderEffortButton() {
+    var cur = state.models && state.models.current;
+    if (!cur) { effortBtnEl.hidden = true; effortBtnEl.textContent = ""; return; }
+    effortBtnEl.textContent = cur.reasoningEffort || "推理";
+    effortBtnEl.hidden = false;
+    if (!effortMenuEl.hidden) renderEffortMenu();
+  }
+
+  function renderEffortMenu() {
+    effortMenuEl.innerHTML = "";
+    var cur = state.models && state.models.current;
+    if (!cur) { effortMenuEl.hidden = true; return; }
+    var t = document.createElement("div");
+    t.className = "cp-title";
+    t.textContent = "推理等级";
+    effortMenuEl.appendChild(t);
+    var curEffort = cur.reasoningEffort;
+    var opts = effortOptions;
+    if (curEffort && opts.indexOf(curEffort) === -1) opts = opts.concat([curEffort]);
+    opts.forEach(function (e) {
+      var row = document.createElement("div");
+      row.className = "cp-row" + (curEffort === e ? " sel" : "");
+      row.textContent = e;
+      if (curEffort === e) {
+        var mark = document.createElement("span");
+        mark.className = "cp-sub";
+        mark.textContent = "✓";
+        row.appendChild(mark);
+      }
+      row.addEventListener("click", function () {
+        if (curEffort !== e) {
+          post({ type: "selectModel", provider: cur.provider, model: cur.model, reasoningEffort: e });
+        }
+        effortMenuEl.hidden = true;
+      });
+      effortMenuEl.appendChild(row);
+    });
   }
 
   /* ---------- interaction card (approval / question from the agent) ---------- */
@@ -2568,7 +2782,7 @@
   var history = [], historyIndex = -1, historyDraft = ""; // CLI-style ↑/↓ history
   function autoGrow() {
     inputEl.style.height = "auto";
-    inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + "px";
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 113) + "px"; // 5-line cap
     // The footer grows upward; if the message area was pinned to the bottom,
     // keep it pinned so the newest content (incl. turn summaries) stays visible.
     if (scrollPos()) messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -2622,24 +2836,56 @@
     }
   });
   sendBtn.addEventListener("click", send);
-  modelEl.addEventListener("change", function () {
-    var v = modelEl.value;
-    if (!v) return;
-    var i = v.indexOf("|");
-    post({ type: "selectModel", provider: v.slice(0, i), model: v.slice(i + 1) });
+  var footerEl = document.querySelector("footer");
+  // Anchor a popup above its trigger button (footer is position: relative).
+  function anchorMenu(menu, btn) {
+    try {
+      var f = footerEl.getBoundingClientRect();
+      var b = btn.getBoundingClientRect();
+      menu.style.left = Math.max(0, b.left - f.left) + "px";
+      menu.style.right = "auto";
+    } catch (e) { /* fall back to CSS default */ }
+  }
+  function openMenu(menu, btn, render) {
+    permMenuEl.hidden = true;
+    modelMenuEl.hidden = true;
+    effortMenuEl.hidden = true;
+    render();
+    anchorMenu(menu, btn);
+    menu.hidden = false;
+  }
+  permBtnEl.addEventListener("click", function (ev) {
+    ev.stopPropagation();
+    if (permMenuEl.hidden) openMenu(permMenuEl, permBtnEl, renderPermMenu);
+    else permMenuEl.hidden = true;
   });
-  effortEl.addEventListener("change", function () {
-    var v = effortEl.value;
-    var mv = modelEl.value;
-    if (!v || !mv) return;
-    var i = mv.indexOf("|");
-    post({ type: "selectModel", provider: mv.slice(0, i), model: mv.slice(i + 1), reasoningEffort: v });
+  modelBtnEl.addEventListener("click", function (ev) {
+    ev.stopPropagation();
+    if (modelMenuEl.hidden) openMenu(modelMenuEl, modelBtnEl, renderModelMenu);
+    else modelMenuEl.hidden = true;
   });
-  presetEl.addEventListener("change", function () {
-    var v = presetEl.value;
-    if (v) post({ type: "selectPermission", permission: v });
+  effortBtnEl.addEventListener("click", function (ev) {
+    ev.stopPropagation();
+    if (effortMenuEl.hidden) openMenu(effortMenuEl, effortBtnEl, renderEffortMenu);
+    else effortMenuEl.hidden = true;
   });
-  // Pull the permission presets once the panel is live (header select).
+  settingsBtnEl.addEventListener("click", function () { post({ type: "openSettings" }); });
+  // click anywhere outside the popups closes them
+  document.addEventListener("click", function (ev) {
+    if (permMenuEl.hidden && modelMenuEl.hidden && effortMenuEl.hidden) return;
+    var t = ev.target;
+    if (t && t.closest &&
+        (t.closest("#perm-menu") || t.closest("#perm-btn") ||
+         t.closest("#model-menu") || t.closest("#model-btn") ||
+         t.closest("#effort-menu") || t.closest("#effort-btn"))) return;
+    permMenuEl.hidden = true;
+    modelMenuEl.hidden = true;
+    effortMenuEl.hidden = true;
+  });
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") { permMenuEl.hidden = true; modelMenuEl.hidden = true; effortMenuEl.hidden = true; }
+  });
+  // Pull the permission presets once the panel is live (composer left button).
   post({ type: "getPermissions" });
 
   /* ---------- image attachments (Ctrl+V paste) ---------- */
@@ -2725,7 +2971,9 @@
   selEl.addEventListener("change", function () {
     if (selEl.value) post({ type: "selectSession", sessionId: selEl.value });
   });
-  $("new-session").addEventListener("click", function () { post({ type: "newSession" }); });
+  $("new-session").addEventListener("click", function () {
+    if (modeMenuOpen) closeModeMenu(); else openModeMenu();
+  });
   var delBtn = $("delete-session");
   delBtn.addEventListener("click", function () {
     if (!selEl.value) return;

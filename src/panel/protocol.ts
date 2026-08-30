@@ -89,13 +89,19 @@ export type HostMessage =
       options: { value: string; label: string }[];
       current?: string;
     }
+  | {
+      type: "agentPresets";
+      /** Agent-preset roster for the new-session mode picker (id → display copy). */
+      presets: { id: string; name?: string; description?: string; isDefault?: boolean }[];
+    }
   | { type: "error"; message: string };
 
 /** Webview → host messages. */
 export type WebviewMessage =
   | { type: "ready" }
   | { type: "selectSession"; sessionId: string }
-  | { type: "newSession" }
+  | { type: "newSession"; agentPreset?: string }
+  | { type: "getAgentPresets" }
   | { type: "deleteSession"; sessionId: string }
   | { type: "send"; text: string; mode?: "queue" | "steer"; attachments?: { mediaType: string; data: string; name?: string }[] }
   | { type: "loadOlder"; beforeSeq: number }
@@ -125,7 +131,8 @@ export type WebviewMessage =
     }
   | { type: "getPermissions" }
   | { type: "selectPermission"; permission: string }
-  | { type: "openExternal"; url: string };
+  | { type: "openExternal"; url: string }
+  | { type: "openSettings" };
 
 export interface PanelSession {
   sessionId: string;

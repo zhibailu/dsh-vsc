@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+<title>DSH 设置</title>
+<style>
+  :root {
+    --fg: var(--vscode-editor-foreground, #d4d4d4);
+    --bg: var(--vscode-editor-background, #1e1e1e);
+    --muted: var(--vscode-descriptionForeground, #9d9d9d);
+    --border: var(--vscode-widget-border, #454545);
+    --accent: var(--vscode-button-background, #0e639c);
+    --input-bg: var(--vscode-input-background, #3c3c3c);
+    --ok: #4ec9b0;
+    --err: var(--vscode-errorForeground, #f14c4c);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 14px 18px; background: var(--bg); color: var(--fg);
+         font-family: var(--vscode-font-family); font-size: var(--vscode-font-size, 13px); }
+  header { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+  h1 { font-size: 16px; margin: 0; }
+  nav { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
+  .tab { background: none; border: none; color: var(--muted); cursor: pointer;
+         padding: 6px 12px; font-size: 13px; border-bottom: 2px solid transparent; }
+  .tab:hover { color: var(--fg); }
+  .tab.sel { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+  #status { min-height: 18px; font-size: 12px; margin-bottom: 8px; }
+  #status.err { color: var(--err); }
+  #status.ok { color: var(--ok); }
+  h2 { font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+  .card { border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; margin: 8px 0; }
+  .card h3 { margin: 0 0 8px; font-size: 13px; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
+  .row label { color: var(--muted); font-size: 12px; min-width: 150px; }
+  input[type="text"], input[type="number"], select { background: var(--input-bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 2px; padding: 3px 6px; font-size: 12px;
+    width: 200px; max-width: 100%; }
+  .perm-opt { display: inline-block; border: 1px solid var(--border); border-radius: 3px;
+    padding: 3px 10px; margin: 2px 4px 2px 0; cursor: pointer; font-size: 12px; }
+  .perm-opt.sel { border-color: var(--accent); color: var(--ok); font-weight: 600; }
+  .save { background: var(--accent); color: var(--vscode-button-foreground, #fff); border: none;
+    border-radius: 3px; padding: 4px 14px; cursor: pointer; font-size: 12px; margin-top: 6px; }
+  .save:disabled { opacity: .5; cursor: default; }
+  details.raw { border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; margin: 6px 0; }
+  details.raw summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  .ns-row { display: flex; gap: 10px; padding: 3px 0; font-size: 12px; }
+  .ns-row .ns { min-width: 160px; font-weight: 600; }
+  .ns-row .ns-val { color: var(--muted); word-break: break-all; }
+  .mono { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; }
+  /* Agent 预设列表 */
+  .preset { border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; margin: 6px 0; }
+  .preset .p-head { display: flex; align-items: center; gap: 8px; }
+  .preset .p-name { font-weight: 600; }
+  .preset .p-tag { border: 1px solid var(--border); border-radius: 3px; color: var(--muted);
+                   font-size: 10px; padding: 0 5px; }
+  .preset .p-tag.user { color: var(--ok); border-color: var(--ok); }
+  .preset .p-tag.default { color: var(--accent); border-color: var(--accent); }
+  .preset .p-desc { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .preset .p-broken { color: var(--err); font-size: 12px; margin-top: 4px; }
+  .hint { color: var(--muted); font-size: 12px; line-height: 1.7; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>⚙ DSH 设置</h1>
+    <nav>
+      <button class="tab sel" data-tab="general">通用设置</button>
+      <button class="tab" data-tab="models">模型</button>
+      <button class="tab" data-tab="plugins">插件</button>
+      <button class="tab" data-tab="presets">Agent 预设</button>
+    </nav>
+  </header>
+  <div id="status"></div>
+
+  <!-- 通用设置 -->
+  <section id="tab-general">
+    <div class="card">
+      <h3>默认模型 <span class="mono">(agent-default-model)</span></h3>
+      <div class="row"><label>provider</label><input id="in-def-provider" type="text"></div>
+      <div class="row"><label>model</label><input id="in-def-model" type="text"></div>
+      <button class="save" id="save-defmodel">保存</button>
+    </div>
+    <div class="card">
+      <h3>默认权限 <span class="mono">(permission.defaultPreset)</span></h3>
+      <div class="row" id="in-perm"></div>
+      <button class="save" id="save-perm">保存</button>
+    </div>
+    <div class="card">
+      <h3>默认模式 <span class="mono">(agent-presets.default)</span></h3>
+      <div class="row"><label>新会话默认 agent preset</label><input id="in-defpreset" type="text"></div>
+      <button class="save" id="save-defpreset">保存</button>
+    </div>
+    <div class="card">
+      <h3>工具并行上限 <span class="mono">(agent-loop.maxParallelToolCalls)</span></h3>
+      <div class="row"><label>每个回合并行工具调用数</label><input id="in-maxpar" type="number" min="1" step="1"></div>
+      <button class="save" id="save-maxpar">保存</button>
+    </div>
+    <div class="card">
+      <h3>主题偏好 <span class="mono">(ui-theme.preference)</span></h3>
+      <div class="row"><label>preference</label>
+        <select id="in-theme">
+          <option value="system">system</option>
+          <option value="light">light</option>
+          <option value="dark">dark</option>
+        </select>
+      </div>
+      <button class="save" id="save-theme">保存</button>
+    </div>
+    <h2>其余命名空间（只读）</h2>
+    <div id="raw-list"></div>
+  </section>
+
+  <!-- 模型 -->
+  <section id="tab-models" hidden>
+    <p class="hint">LLM provider 配置（settings 域 llm-* namespace）。</p>
+    <div id="llm-cards"></div>
+    <h2>原始值（只读）</h2>
+    <div id="raw-models"></div>
+  </section>
+
+  <!-- 插件 -->
+  <section id="tab-plugins" hidden>
+    <p class="hint">官方 web 的「插件」板块 = 客户端运行时自省：插件清单（Loader inventory）与插件配置表单都渲染自官方客户端运行时的内部状态，<b>桥接协议未暴露该面</b>（无独立 RPC）。<br>
+    我们的面板插件化蓝图见 internal/plugin-sets.md（协议插件集 + 宿主适配层 + 用户拓展判据）。</p>
+    <h2>当前 harness 插件态（只读，来自设置域）</h2>
+    <div id="raw-plugins"></div>
+  </section>
+
+  <!-- Agent 预设 -->
+  <section id="tab-presets" hidden>
+    <p class="hint">agentPreset.list 罗列部署提供的预设（内置/自定义）。</p>
+    <div id="preset-list"></div>
+  </section>
+
+<script>
+(function () {
+  "use strict";
+  var vscode = acquireVsCodeApi();
+  var $ = function (id) { return document.getElementById(id); };
+  var statusEl = $("status");
+  var revisions = {}; // ns -> revision
+  var data = null;    // settings.describe view
+
+  function setStatus(text, kind) {
+    statusEl.textContent = text || "";
+    statusEl.className = kind || "";
+  }
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+  /* tabs */
+  var tabs = Array.prototype.slice.call(document.querySelectorAll(".tab"));
+  tabs.forEach(function (t) {
+    t.addEventListener("click", function () {
+      tabs.forEach(function (x) { x.classList.remove("sel"); });
+      t.classList.add("sel");
+      ["general", "models", "plugins", "presets"].forEach(function (name) {
+        $("tab-" + name).hidden = name !== t.getAttribute("data-tab");
+      });
+    });
+  });
+
+  function ns(name) {
+    return (data && data.namespaces || []).find(function (n) { return n.ns === name; });
+  }
+
+  function applyData(value) {
+    data = value;
+    revisions = {};
+    (value.namespaces || []).forEach(function (n) { revisions[n.ns] = n.revision; });
+
+    var def = ns("agent-default-model");
+    if (def) {
+      var v = def.value || {};
+      $("in-def-provider").value = v.provider || "";
+      $("in-def-model").value = v.model || "";
+    }
+    var perm = ns("permission");
+    if (perm) {
+      var cur = (perm.value || {}).defaultPreset;
+      var labels = { "read-only": "仅可查看", "workspace-write": "可写入工作区", "danger-full-access": "完全权限" };
+      var box = $("in-perm");
+      box.innerHTML = "";
+      Object.keys(labels).forEach(function (key) {
+        var opt = document.createElement("span");
+        opt.className = "perm-opt" + (key === cur ? " sel" : "");
+        opt.textContent = labels[key];
+        opt.setAttribute("data-v", key);
+        opt.addEventListener("click", function () {
+          Array.prototype.forEach.call(box.children, function (c) { c.className = "perm-opt"; });
+          opt.className = "perm-opt sel";
+        });
+        box.appendChild(opt);
+      });
+    }
+    var dp = ns("agent-presets");
+    if (dp) $("in-defpreset").value = (dp.value || {}).default || "";
+    var lp = ns("agent-loop");
+    if (lp) {
+      var mp = (lp.value || {}).maxParallelToolCalls;
+      $("in-maxpar").value = mp === undefined ? "" : String(mp);
+    }
+    var theme = ns("ui-theme");
+    if (theme) {
+      var pref = (theme.value || {}).preference || "system";
+      $("in-theme").value = ["system", "light", "dark"].indexOf(pref) >= 0 ? pref : "system";
+    }
+
+    renderRaw();
+    renderLlm();
+    renderPlugins();
+    setStatus(value.writable === false ? "当前只读（writable: false），无法保存。" : "", value.writable === false ? "err" : "");
+  }
+
+  /* read-only namespace listing */
+  function rawListEl(containerId, namespaces, skip) {
+    var list = $(containerId);
+    list.innerHTML = "";
+    namespaces.forEach(function (n) {
+      if (skip && skip.indexOf(n.ns) >= 0) return;
+      var row = document.createElement("div");
+      row.className = "ns-row";
+      var name = document.createElement("div");
+      name.className = "ns";
+      name.textContent = n.ns;
+      var val = document.createElement("div");
+      val.className = "ns-val mono";
+      val.textContent = JSON.stringify(n.value);
+      row.appendChild(name);
+      row.appendChild(val);
+      list.appendChild(row);
+    });
+  }
+  function renderRaw() {
+    if (!data) return;
+    rawListEl("raw-list", data.namespaces, ["agent-default-model", "permission", "agent-presets", "agent-loop", "ui-theme", "llm-deepseek", "llm-pi-ai"]);
+  }
+
+  /* models tab: editable llm-* namespace scalars + raw values */
+  var LLM_FIELDS = {
+    "llm-deepseek": [
+      { key: "model", label: "model", type: "text" },
+      { key: "maxTokens", label: "maxTokens", type: "number" },
+      { key: "defaultContextWindow", label: "defaultContextWindow", type: "number" },
+      { key: "streamIdleTimeoutMs", label: "streamIdleTimeoutMs", type: "number" },
+      { key: "maxRequestImageBytes", label: "maxRequestImageBytes", type: "number" },
+    ],
+    "llm-pi-ai": [
+      { key: "providers", label: "providers（JSON）", type: "text" },
+    ],
+  };
+  var llmEditors = {}; // ns -> {fieldKey: inputEl}
+  function renderLlm() {
+    if (!data) return;
+    var cards = $("llm-cards");
+    cards.innerHTML = "";
+    llmEditors = {};
+    Object.keys(LLM_FIELDS).forEach(function (name) {
+      var n = ns(name);
+      if (!n) return;
+      var card = document.createElement("div");
+      card.className = "card";
+      var h3 = document.createElement("h3");
+      h3.textContent = name + " " + (n.applies === "restart" ? "（需重启生效）" : "");
+      card.appendChild(h3);
+      llmEditors[name] = {};
+      var v = n.value || {};
+      LLM_FIELDS[name].forEach(function (f) {
+        var row = document.createElement("div");
+        row.className = "row";
+        var label = document.createElement("label");
+        label.textContent = f.key;
+        var input = document.createElement("input");
+        input.type = f.type;
+        input.value = f.type === "text" ? JSON.stringify(v[f.key]) : String(v[f.key] === undefined ? "" : v[f.key]);
+        row.appendChild(label);
+        row.appendChild(input);
+        card.appendChild(row);
+        llmEditors[name][f.key] = input;
+      });
+      var btn = document.createElement("button");
+      btn.className = "save";
+      btn.textContent = "保存";
+      btn.addEventListener("click", function () { saveLlm(name); });
+      card.appendChild(btn);
+      cards.appendChild(card);
+    });
+    rawListEl("raw-models", data.namespaces.filter(function (n) { return n.ns === "llm-deepseek" || n.ns === "llm-pi-ai"; }));
+  }
+  function saveLlm(name) {
+    var ops = [];
+    var n = ns(name);
+    var v = n && n.value || {};
+    LLM_FIELDS[name].forEach(function (f) {
+      var input = llmEditors[name][f.key];
+      if (!input) return;
+      var raw = input.value.trim();
+      if (f.type === "number") {
+        var num = Number(raw);
+        if (raw !== "" && !isNaN(num)) ops.push({ op: "set", path: [f.key], value: num });
+      } else {
+        var parsed = raw === "" ? v[f.key] : raw;
+        // providers 存 JSON 对象
+        if (f.key === "providers") {
+          try { parsed = JSON.parse(raw); } catch (e) { setStatus("providers 必须是合法 JSON", "err"); return; }
+        }
+        if (raw !== "" || f.key === "providers") ops.push({ op: "set", path: [f.key], value: parsed });
+      }
+    });
+    if (!ops.length) { setStatus("没有可保存的改动", "err"); return; }
+    vscode.postMessage({ type: "settingsMutate", ns: name, ops: ops, expectedRevision: revisions[name] });
+    setStatus("保存 " + name + " …");
+  }
+
+  /* plugins tab: the inventory face is runtime introspection (no RPC) — show
+     the namespaces the harness does expose around plugin-ish config */
+  function renderPlugins() {
+    if (!data) return;
+    rawListEl("raw-plugins", data.namespaces.filter(function (n) {
+      return n.ns === "agent-presets" || n.ns === "web-search-deepseek";
+    }));
+  }
+
+  /* agent presets tab */
+  function applyPresets(value) {
+    var list = $("preset-list");
+    list.innerHTML = "";
+    var presets = (value && value.presets) || [];
+    if (!presets.length) {
+      var empty = document.createElement("p");
+      empty.className = "hint";
+      empty.textContent = "部署未配置任何预设，所有会话共享 host 组合。";
+      list.appendChild(empty);
+      return;
+    }
+    presets.forEach(function (p) {
+      var row = document.createElement("div");
+      row.className = "preset";
+      var head = document.createElement("div");
+      head.className = "p-head";
+      var name = document.createElement("span");
+      name.className = "p-name";
+      name.textContent = p.name || p.id;
+      head.appendChild(name);
+      if (p.trust === "user") {
+        var tag = document.createElement("span");
+        tag.className = "p-tag user";
+        tag.textContent = "自定义";
+        head.appendChild(tag);
+      }
+      if (p.isDefault) {
+        var tag2 = document.createElement("span");
+        tag2.className = "p-tag default";
+        tag2.textContent = "默认";
+        head.appendChild(tag2);
+      }
+      var idLine = document.createElement("div");
+      idLine.className = "hint mono";
+      idLine.textContent = p.id;
+      row.appendChild(head);
+      if (p.description) {
+        var desc = document.createElement("div");
+        desc.className = "p-desc";
+        desc.textContent = p.description;
+        row.appendChild(desc);
+      }
+      if (p.broken) {
+        var br = document.createElement("div");
+        br.className = "p-broken";
+        br.textContent = "broken: " + p.broken;
+        row.appendChild(br);
+      }
+      row.appendChild(idLine);
+      list.appendChild(row);
+    });
+  }
+
+  /* saves */
+  function mutate(ns, ops, okText) {
+    vscode.postMessage({ type: "settingsMutate", ns: ns, ops: ops, expectedRevision: revisions[ns] });
+    setStatus(okText + " …");
+  }
+  $("save-defmodel").addEventListener("click", function () {
+    mutate("agent-default-model", [
+      { op: "set", path: ["provider"], value: $("in-def-provider").value.trim() },
+      { op: "set", path: ["model"], value: $("in-def-model").value.trim() },
+    ], "保存默认模型");
+  });
+  $("save-perm").addEventListener("click", function () {
+    var sel = $("in-perm").querySelector(".perm-opt.sel");
+    if (!sel) { setStatus("请选择默认权限", "err"); return; }
+    mutate("permission", [{ op: "set", path: ["defaultPreset"], value: sel.getAttribute("data-v") }], "保存默认权限");
+  });
+  $("save-defpreset").addEventListener("click", function () {
+    var v = $("in-defpreset").value.trim();
+    if (!v) { setStatus("默认模式不能为空", "err"); return; }
+    mutate("agent-presets", [{ op: "set", path: ["default"], value: v }], "保存默认模式");
+  });
+  $("save-maxpar").addEventListener("click", function () {
+    var raw = $("in-maxpar").value;
+    var n = parseInt(raw, 10);
+    if (!n || n < 1) { setStatus("工具并行上限必须是 ≥1 的整数", "err"); return; }
+    mutate("agent-loop", [{ op: "set", path: ["maxParallelToolCalls"], value: n }], "保存工具并行上限");
+  });
+  $("save-theme").addEventListener("click", function () {
+    mutate("ui-theme", [{ op: "set", path: ["preference"], value: $("in-theme").value }], "保存主题偏好");
+  });
+
+  window.addEventListener("message", function (ev) {
+    var msg = ev.data;
+    if (!msg) return;
+    if (msg.type === "settingsData") { applyData(msg.value); }
+    else if (msg.type === "settingsAgentPresets") { applyPresets(msg.value); }
+    else if (msg.type === "settingsError") { setStatus(msg.message, "err"); }
+    else if (msg.type === "settingsSaved") { setStatus(msg.message || "已保存", "ok"); }
+  });
+
+  vscode.postMessage({ type: "settingsReady" });
+})();
+</script>
+</body>
+</html>

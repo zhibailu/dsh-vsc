@@ -113,6 +113,8 @@ export const METHODS = {
   commandsList: "commands/list",
   commandsExecute: "commands/execute",
   agentPresetList: "agentPreset.list",
+  settingsDescribe: "settings.describe",
+  settingsMutate: "settings.mutate",
 } as const;
 
 /** workspace.list / workspace.create row (DSH workspace domain view). */
@@ -140,7 +142,6 @@ export interface ModelCatalog {
 }
 
 /* ---------- session.history (wire schema, single source) ---------- */
-
 /** A raw session event frame as the harness emits it (wire passthrough).
  *  The panel's own view (src/panel/protocol.ts PanelEvent) extends this with
  *  host-supplied fields (time, envelope rpcId) — the wire shape lives here. */
@@ -173,4 +174,36 @@ export interface HistoryPage {
       permissions?: PermissionProjection;
     };
   };
+}
+
+/* ---------- settings domain (settings.describe / settings.mutate) ---------- */
+
+/** One schema-declared secret slot inside a redacted namespace value. */
+export interface SettingsSecretView {
+  path: string[];
+  set: boolean;
+}
+
+/** Wire view of one registered settings namespace (settings domain). */
+export interface SettingsNamespaceView {
+  ns: string;
+  schema: unknown;
+  value: unknown;
+  base?: unknown;
+  user?: unknown;
+  applies: "live" | "restart";
+  secrets: SettingsSecretView[];
+  revision: number;
+}
+
+/** One path-addressed edit carried by settings.mutate. */
+export type SettingsPathOp =
+  | { op: "set"; path: string[]; value: unknown }
+  | { op: "unset"; path: string[] };
+
+/** settings.describe response value. */
+export interface SettingsDescribeView {
+  writable: boolean;
+  hasDocument: boolean;
+  namespaces: SettingsNamespaceView[];
 }
