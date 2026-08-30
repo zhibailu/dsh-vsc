@@ -2,7 +2,7 @@
   "name": "dsh-vsc",
   "displayName": "DSH Bridge",
   "description": "DeepSeek Harness in VS Code: embedded Web GUI plus native editor bridge (context, diff review, file jumps).",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "local",
   "license": "MIT",
   "author": "zhibailu",
@@ -21,21 +21,27 @@
     "Other"
   ],
   "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Pure bridge to the local DSH harness (127.0.0.1:3080): panel, status bar, editor context. No workspace code is executed."
+    }
+  },
   "activationEvents": [
     "onStartupFinished"
   ],
   "contributes": {
     "viewsContainers": {
-      "secondarySidebar": [
+      "activitybar": [
         {
-          "id": "dsh.right",
+          "id": "dsh-right",
           "title": "DSH",
           "icon": "media/dsh.svg"
         }
       ]
     },
     "views": {
-      "dsh.right": [
+      "dsh-right": [
         {
           "type": "webview",
           "id": "dsh.sidebar.right",

@@ -79,7 +79,7 @@ export async function sendAsk(client: HarnessClient, contextBlock: string, instr
   await client.prompt(sessionId, [{ type: "text", text: message }], "queue");
   const short = sessionId.replace(/^session-/, "").slice(0, 8);
   void vscode.window.showInformationMessage(`DSH: 已排队发送到会话 ${short}（${instruction}）。`);
-  void vscode.commands.executeCommand("dsh.sidebar.focus");
+  void vscode.commands.executeCommand("dsh.sidebar.right.focus");
 }
 
 /** Pick the most recently updated non-blank session; create one if none exists. */
