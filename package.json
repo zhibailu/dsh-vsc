@@ -2,7 +2,7 @@
   "name": "dsh-vsc",
   "displayName": "DSH Bridge",
   "description": "DeepSeek Harness in VS Code: embedded Web GUI plus native editor bridge (context, diff review, file jumps).",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "local",
   "license": "MIT",
   "author": "zhibailu",
