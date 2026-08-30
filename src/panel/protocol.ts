@@ -124,7 +124,8 @@ export type WebviewMessage =
       answers: { id: string; selected: string[]; custom?: string }[];
     }
   | { type: "getPermissions" }
-  | { type: "selectPermission"; permission: string };
+  | { type: "selectPermission"; permission: string }
+  | { type: "openExternal"; url: string };
 
 export interface PanelSession {
   sessionId: string;

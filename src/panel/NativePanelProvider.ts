@@ -396,6 +396,18 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           );
         break;
       }
+      case "openExternal": {
+        try {
+          const uri = vscode.Uri.parse(message.url);
+          void vscode.env.openExternal(uri).then(
+            () => undefined,
+            (error) => this.post({ type: "error", message: `打开链接失败: ${(error as Error).message}` })
+          );
+        } catch (error) {
+          this.post({ type: "error", message: `打开链接失败: ${(error as Error).message}` });
+        }
+        break;
+      }
       case "queueSteer":
       case "queueRemove": {
         if (!this.activeSessionId) break;

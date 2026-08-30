@@ -5,6 +5,7 @@
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: vscode-webview-resource:;">
 <title>DSH</title>
+<script>/*__DASH_MARKDOWN__*/</script>
 <style>
   :root {
     --fg: var(--vscode-editor-foreground, #d4d4d4);
@@ -130,12 +131,22 @@
   .md-table th { background: var(--input-bg); font-weight: 600; position: sticky; top: 0; }
   .md-table td { white-space: pre-wrap; word-break: break-word; }
 
-  /* markdown headings / em / del (the panel's markdown-lite output) */
+  /* markdown headings / em / del (from the grafted micromark engine) */
   .md-h1, .md-h2, .md-h3, .md-h4, .md-h5, .md-h6 { margin: 10px 0 4px; font-weight: 700; line-height: 1.35; }
   .md-h1 { font-size: 17px; } .md-h2 { font-size: 15px; } .md-h3 { font-size: 14px; }
   .md-h4, .md-h5, .md-h6 { font-size: 13px; }
   .body em { font-style: italic; }
   .body del { color: var(--muted); }
+
+  /* micromark extras: lists / quotes / rules / links / task checkboxes */
+  .body ul, .body ol { margin: 4px 0 4px 22px; padding: 0; }
+  .body li { margin: 1px 0; }
+  .body blockquote { margin: 4px 0; padding: 2px 10px; border-left: 2px solid var(--border); color: var(--muted); }
+  .body hr { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
+  .body a { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: none; cursor: pointer; }
+  .body a:hover { text-decoration: underline; }
+  .body a.md-img-link { color: var(--muted); font-size: 12px; }
+  .body input[type="checkbox"] { vertical-align: middle; margin: 0 4px 0 0; }
 
   /* block-level copy buttons (markdown code blocks + tool args/result) */
   pre.md-code { position: relative; padding-right: 56px; }
@@ -406,119 +417,15 @@
   }
   function shortId(id) { return String(id || "").replace(/^session-/, "").slice(0, 8); }
 
-  /* ---------- markdown-lite ---------- */
-  function renderInline(text) {
-    return esc(text)
-      .replace(/`([^`]+)`/g, "<code>$1</code>")
-      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-      .replace(/\*([^*\n]+)\*/g, "<em>$1</em>")
-      .replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
-  }
-  /** GFM table separator line check: a row of |---| (optionally :aligned:). */
-  function isTableSeparator(line) {
-    var cells = line.trim().replace(/^\||\|$/g, "").split("|");
-    if (cells.length < 2) return false;
-    return cells.every(function (c) { return /^\s*:?-+:?\s*$/.test(c.trim()); });
-  }
-  function renderTable(rows) {
-    var header = rows[0];
-    var split = function (line) {
-      return line.trim().replace(/^\||\|$/g, "").split("|").map(function (c) { return c.trim(); });
-    };
-    var head = split(header);
-    // rows = [header, dataRow, ...]; the |---| separator may or may not be
-    // present at index 1 depending on caller — skip it if so.
-    var body = rows.slice(1);
-    if (body.length > 0 && isTableSeparator(body[0])) body = body.slice(1);
-    var html = "<div class='md-table'><table><thead><tr>";
-    for (var h = 0; h < head.length; h++) html += "<th>" + renderInline(head[h]) + "</th>";
-    html += "</tr></thead><tbody>";
-    for (var r = 0; r < body.length; r++) {
-      var cells = split(body[r]);
-      html += "<tr>";
-      for (var c = 0; c < head.length; c++) html += "<td>" + renderInline(cells[c] || "") + "</td>";
-      html += "</tr>";
-    }
-    html += "</tbody></table></div>";
-    return html;
-  }
-  /** Line-based markdown-lite renderer.
-   *  Walks lines left to right and classifies each into:
-   *   - fenced code block (``` ... ```)   -> <pre class='md-code'>
-   *   - GFM table (header + |---| sep)    -> <table>
-   *   - ATX heading (# .. ######)         -> <div class='md-hN'>
-   *   - ordinary text                     -> renderInline
-   *  Spacing rule (matches web markdown): BLOCK elements (pre/table/heading)
-   *  separate by their own margins — they emit NO trailing "\n" (the .body
-   *  is pre-wrap, so a bare newline after a block would double the gap into
-   *  a visible blank row). Text paragraphs separate by one "\n" between
-   *  adjacent text lines; a blank line between two TEXT lines is one "\n".
-   *  Line-first ordering keeps a ``` inside a table cell from splitting the
-   *  table, and a | inside a code block from faking a table. */
-  function isBlockAt(lines, idx) {
-    if (idx >= lines.length) return false;
-    var tl = lines[idx].trim();
-    if (tl.indexOf("```") === 0) return true;
-    if (tl.indexOf("|") !== -1 && idx + 1 < lines.length && isTableSeparator(lines[idx + 1])) return true;
-    return /^(#{1,6})\s+/.test(tl);
-  }
-  function renderText(text) {
-    var lines = String(text).split("\n");
-    var out = "";
-    var lastKind = "none"; // last emitted: "text" | "block" | "none"
-    var i = 0;
-    while (i < lines.length) {
-      var line = lines[i];
-      var t = line.trim();
-      // fenced code block
-      if (t.indexOf("```") === 0) {
-        var lang = t.slice(3).trim();
-        var buf = [];
-        i++;
-        while (i < lines.length && lines[i].trim().indexOf("```") !== 0) { buf.push(lines[i]); i++; }
-        i++; // closing fence
-        var code = esc(buf.join("\n"));
-        out += "<pre class='md-code'><code" + (lang ? " data-lang='" + esc(lang) + "'" : "") + ">" + code + "</code>"
-             + "<button class='block-copy' title='复制代码'>⧉ 复制</button></pre>";
-        lastKind = "block";
-        continue;
-      }
-      // GFM table: header + separator line
-      if (t.indexOf("|") !== -1 && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
-        var rows = [line];
-        i += 2;
-        while (i < lines.length && lines[i].indexOf("|") !== -1) { rows.push(lines[i]); i++; }
-        out += renderTable(rows);
-        lastKind = "block";
-        continue;
-      }
-      // ATX heading: # .. ###### (web GUI renders the same)
-      var hm = /^(#{1,6})\s+(.+)$/.exec(t);
-      if (hm) {
-        var lvl = hm[1].length;
-        out += "<div class='md-h" + lvl + "'>" + renderInline(hm[2]) + "</div>";
-        lastKind = "block";
-        i++;
-        continue;
-      }
-      // blank line: paragraph gap ONLY between two text lines (blocks use margins)
-      if (t === "") {
-        var j = i;
-        while (j < lines.length && lines[j].trim() === "") j++;
-        if (lastKind === "text" && j < lines.length && !isBlockAt(lines, j)) out += "\n";
-        i = j;
-        continue;
-      }
-      // ordinary line: ends with "\n" whenever more lines follow (the blank
-      // line handler adds the SECOND "\n" between text paragraphs, so two
-      // text lines separated by an empty line render as one blank row —
-      // exactly like web markdown's <p> margins).
-      out += renderInline(line);
-      lastKind = "text";
-      i++;
-      if (i < lines.length) out += "\n";
-    }
-    return out;
+  /* ---------- markdown ----------
+     The renderer is the SAME micromark engine the official DSH web GUI uses,
+     bundled at build time into the __DASH_MARKDOWN__ script above (see
+     src/panel/renderer.ts). This wrapper is just a call + escape fallback. */
+  function renderMd(text) {
+    try {
+      if (window.DshMd) return window.DshMd.render(text);
+    } catch (e) {}
+    return esc(text);
   }
 
   /* ---------- helpers on event payloads ---------- */
@@ -1211,7 +1118,7 @@
         } else {
           node.className = "body";
           node.setAttribute("data-bidx", w.key.slice(1));
-          node.innerHTML = renderText(w.text);
+          node.innerHTML = renderMd(w.text);
           if (item.streaming) node.appendChild(cursorSpan());
         }
       } else {
@@ -1225,7 +1132,7 @@
           if (body && body.hidden !== !w.open) body.hidden = !w.open;
           if (pre && pre.textContent !== w.text) pre.textContent = w.text;
         } else {
-          node.innerHTML = renderText(w.text);
+          node.innerHTML = renderMd(w.text);
           var sc = node.querySelector(".stream-cursor");
           if (item.streaming) { if (!sc) node.appendChild(cursorSpan()); }
           else if (sc) sc.remove();
@@ -1514,7 +1421,7 @@
         } else {
           var ub = document.createElement("div");
           ub.className = "body";
-          ub.innerHTML = renderInline(item.text);
+          ub.innerHTML = renderMd(item.text);
           el.appendChild(ub);
           var ua = document.createElement("div");
           ua.className = "msg-actions";
@@ -1548,7 +1455,7 @@
                     (rOpen ? "▾" : "▸") + " 思考</div>" +
                     "<div class='reasoning-body'" + (rOpen ? "" : " hidden") + "><pre>" + esc(b.text) + "</pre></div></div>";
           } else {
-            html += "<div class='body' data-bidx='" + bidx + "'>" + renderText(b.text) + (item.streaming ? "<span class='stream-cursor'></span>" : "") + "</div>";
+            html += "<div class='body' data-bidx='" + bidx + "'>" + renderMd(b.text) + (item.streaming ? "<span class='stream-cursor'></span>" : "") + "</div>";
             bidx++;
           }
         });
@@ -1660,6 +1567,14 @@
         break;
       }
     }
+  });
+
+  /* ---------- markdown links: open externally (never navigate the webview) ---------- */
+  messagesEl.addEventListener("click", function (ev) {
+    var a = ev.target && ev.target.closest ? ev.target.closest("a[href]") : null;
+    if (!a) return;
+    ev.preventDefault();
+    post({ type: "openExternal", url: a.getAttribute("href") });
   });
 
   /* ---------- block-level copy: one delegated listener for every
