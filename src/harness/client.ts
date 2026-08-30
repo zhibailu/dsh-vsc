@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { METHODS, type ClientRequest, type ServerResponse, type RpcError, type HostDescription, type ModelCatalog, type PromptContentPart, type QueueAction, type SessionSummary, type WorkspaceView } from "./protocol";
+import { METHODS, type ClientRequest, type ServerResponse, type RpcError, type HostDescription, type HistoryPage, type ModelCatalog, type PromptContentPart, type QueueAction, type SessionSummary, type WorkspaceView } from "./protocol";
 
 /** A business-level RPC failure (result.ok === false). */
 export class RpcErrorResult extends Error {
@@ -62,21 +62,7 @@ export class HarnessClient {
     beforeSeq?: number,
     maxMessages = 30,
     signal?: AbortSignal
-  ): Promise<{
-    events: { event: SessionEventLike }[];
-    hasMore: boolean;
-    projections?: {
-      asOfSeq?: number;
-      values?: {
-        todos?: { content: string; status: "pending" | "in_progress" | "completed" }[] | null;
-        /** Current session permission presets (header 权限 select). */
-        permissions?: {
-          options?: { value: string; name?: string }[];
-          currentValue?: string;
-        };
-      };
-    };
-  }> {
+  ): Promise<HistoryPage> {
     return this.call(
       METHODS.sessionHistory,
       { sessionId, beforeSeq, maxMessages },
@@ -84,8 +70,11 @@ export class HarnessClient {
     );
   }
 
-  createSession(opts?: { workspaceId?: string }): Promise<{ sessionId: string }> {
-    return this.call<{ sessionId: string }>(METHODS.sessionCreate, opts ?? {});
+  createSession(opts?: { workspaceId?: string; agentPreset?: string }): Promise<{ sessionId: string }> {
+    const payload: Record<string, string> = {};
+    if (opts?.workspaceId) payload.workspaceId = opts.workspaceId;
+    if (opts?.agentPreset) payload.agentPreset = opts.agentPreset;
+    return this.call<{ sessionId: string }>(METHODS.sessionCreate, payload);
   }
 
   /** Register (or idempotently resolve) a directory as a DSH workspace. */
@@ -143,8 +132,9 @@ export class HarnessClient {
     });
   }
 
-  /** Available agent presets (agentPreset.list). Entry fields mirror the
-   *  host schema: id/trust/isDefault/name/description/broken. */
+  /** Available agent presets (agentPreset.list) — feeds the panel's ＋
+   *  new-session mode picker (标准 / PTC / 极简 / 创造 + user presets).
+   *  Entry fields mirror the host schema: id/trust/isDefault/name/description/broken. */
   agentPresetList(signal?: AbortSignal): Promise<{
     presets: {
       id: string;
@@ -158,11 +148,6 @@ export class HarnessClient {
     hasDocument: boolean;
   }> {
     return this.call(METHODS.agentPresetList, {}, signal);
-  }
-
-  /** Select an agent preset for a session (agentPreset.select). */
-  agentPresetSelect(sessionId: string, agentPreset: string): Promise<{ agentPreset: string }> {
-    return this.call<{ agentPreset: string }>(METHODS.agentPresetSelect, { sessionId, agentPreset });
   }
 
   updateQueue(sessionId: string, itemId: string, action: QueueAction): Promise<{ accepted: true }> {
@@ -198,12 +183,4 @@ export class HarnessClient {
       return null;
     }
   }
-}
-
-/** Minimal session-event shape (wire passthrough). */
-export interface SessionEventLike {
-  type: string;
-  seq?: number;
-  data?: Record<string, unknown>;
-  surfaceOp?: string;
 }

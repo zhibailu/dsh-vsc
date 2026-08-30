@@ -113,7 +113,6 @@ export const METHODS = {
   commandsList: "commands/list",
   commandsExecute: "commands/execute",
   agentPresetList: "agentPreset.list",
-  agentPresetSelect: "agentPreset.select",
 } as const;
 
 /** workspace.list / workspace.create row (DSH workspace domain view). */
@@ -138,4 +137,40 @@ export interface ModelCatalog {
   routable: boolean;
   groups: { id: string; name: string; models: { id: string; name: string; description?: string }[] }[];
   failures: { id: string; name: string; message: string }[];
+}
+
+/* ---------- session.history (wire schema, single source) ---------- */
+
+/** A raw session event frame as the harness emits it (wire passthrough).
+ *  The panel's own view (src/panel/protocol.ts PanelEvent) extends this with
+ *  host-supplied fields (time, envelope rpcId) — the wire shape lives here. */
+export interface SessionEventLike {
+  type: string;
+  seq?: number;
+  data?: Record<string, unknown>;
+  surfaceOp?: string;
+}
+
+/** The `todos` projection unit (per-turn task list; null after turn/start). */
+export type TodoProjection = { content: string; status: "pending" | "in_progress" | "completed" }[] | null;
+
+/** The `permissions` projection (header 权限 select; same source as web). */
+export interface PermissionProjection {
+  options?: { value: string; name?: string }[];
+  currentValue?: string;
+}
+
+/** One history page. Tail page (beforeSeq absent) carries the projections
+ *  block — the same source the web GUI's task bar / permission select render
+ *  from. */
+export interface HistoryPage {
+  events: { event: SessionEventLike }[];
+  hasMore: boolean;
+  projections?: {
+    asOfSeq?: number;
+    values?: {
+      todos?: TodoProjection;
+      permissions?: PermissionProjection;
+    };
+  };
 }
