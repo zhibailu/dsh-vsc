@@ -1,3 +1,4 @@
+// 底部状态栏指示器
 import * as vscode from "vscode";
 
 /** Left status bar indicator: harness state; click opens the sidebar / review. */

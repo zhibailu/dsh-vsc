@@ -1,3 +1,4 @@
+// 唯一主干入口
 import * as vscode from "vscode";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";

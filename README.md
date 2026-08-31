@@ -1,100 +1,191 @@
-# DSH Bridge (dsh-vsc)
+# DSH Bridge · DeepSeek Harness for VS Code
 
-在 VS Code 侧边栏里用 DeepSeek Harness（DSH）干活：嵌入真实 Web GUI + 原生编辑器桥（选区提问、改动审查、文件跳转）。
+**Run [DeepSeek Harness](https://github.com/deepseek-ai/dsh) — the local AI agent — inside VS Code.** A native sidebar panel plus an editor bridge that connects to DSH as a **protocol client**, without rewriting it and without starting a second server.
 
-## 安装（推荐：下载 Release 安装包）
+Read this in: **English** · [简体中文](README.zh.md)
 
-需要：Windows / macOS / Linux + VS Code。
+---
 
-1. 打开 [Releases](https://github.com/zhibailu/dsh-vsc/releases)，下载最新的 `dsh-vsc-<版本号>.vsix`
-2. 安装（VS Code 里 Ctrl+Shift+P → **Install from VSIX**，或命令行）：
+![version](https://img.shields.io/badge/version-0.2.1-2ea44f)
+![license](https://img.shields.io/badge/license-MIT-blue)
+![vs code](https://img.shields.io/badge/VS%20Code-%5E1.90.0-007ACC)
+![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+![node](https://img.shields.io/badge/node-%E2%89%A518-339933)
 
-```bash
-# 把 <版本号> 换成你下载的实际文件名
-code --install-extension dsh-vsc-<版本号>.vsix --force
-```
+> **TL;DR** — DeepSeek Harness (DSH) is an AI *agent* that lives on your machine (default `http://127.0.0.1:3080`). DSH ships a web UI, but a web UI is just **one client** of DSH's wire protocol. `dsh-vsc` is **another client** — a real VS Code sidebar. It does not rewrite DSH and it does not copy its UI: it talks the protocol and renders the work in a panel that belongs to VS Code, plus a native editor bridge for *your* code.
 
-3. 重载窗口（Ctrl+Shift+P → **Reload Window**），左侧活动栏点 **DSH** 图标即可使用
+---
 
-> dsh（harness 本体）不用单独装：扩展发现没有 harness 在跑时，会自动拉起一个（`npm i -g @deepseek-ai/dsh` 或 `npx @deepseek-ai/dsh web` 跑着的会被直接复用，默认 `http://127.0.0.1:3080`，可用 `DSH_WEB_URL` 或设置 `dshVsc.url` 覆盖）。
+## Table of contents
 
-## 从源码构建（开发者 / 想改代码时）
+- [Why dsh-vsc](#why-dsh-vsc)
+- [Features](#features)
+- [Screenshots](#screenshots)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [Design philosophy — "pure bridge"](#design-philosophy--pure-bridge)
+- [Commands](#commands)
+- [Configuration](#configuration)
+- [What is deliberately out of scope](#what-is-deliberately-out-of-scope)
+- [Development](#development)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Why dsh-vsc
+
+Most "AI-in-IDE" tools **rebuild the AI**. This project does the opposite:
+
+- **It does not fork or reimplement DeepSeek Harness.** DSH stays byte-identical (`npm` original). Whatever it can do, this extension can surface.
+- **It does not embed an iframe of the web UI as the primary experience.** The sidebar is a **native VS Code panel** with a native editor bridge — select code, right-click, ask; watch tool calls, approve operations, review diffs.
+- **It stays robust when DSH updates.** It consumes DSH's **wire contract (protocol)**, not its UI. DSH's UI can change freely; this extension does not have to follow.
+
+If you already use DSH (web GUI or CLI) and you work in VS Code, `dsh-vsc` turns your editor into a first-class DSH surface with **one shared history, one contract, and no second server**.
+
+## Features
+
+**Native sidebar panel**
+- Streaming agent replies, collapsible **reasoning** and per-turn **timing**.
+- Adjacent tool calls merged into **"⚙ Actions"** collapsible blocks; **`+N-M`** change stats per turn.
+- **Approval cards** when the agent asks to run a privileged operation — allow once / deny.
+- **Question cards** for agent questions: single-choice (number keys), multi-select checkboxes, recommended badge, custom answer with ↑↓ recall, skip — answered via `/api/respond`.
+- **Session modes** (standard / PTC / minimal / creative), **reasoning-effort** switch, and **permission-preset** switch (read-only / workspace-write / full-access).
+- **Composer takeover**: the input bar hides while the agent is asking, so you can't accidentally send a message mid-question.
+
+**Native editor bridge**
+- **Ask DSH about a selection** — select code → right-click → *DSH: Ask about selection*, with a structured context card (file / selection / workspace / branch) into the latest session; explain / review / fix / custom.
+- **Review Agent Changes** — watches `write` / `edit` / `str_replace_editor` tool calls, reports changed files per turn, opens the native VS Code **git diff** in one click.
+
+**Harness lifecycle**
+- Reuses a running DSH (shared client, no second server); auto-starts one only when none is reachable; self-heals (respawns on death with backoff); reference-counted shutdown (never kills a harness another client is using). Full detail in [How it works](#how-it-works).
+
+## Screenshots
+
+| Sidebar overview | Chat & tool actions | Ask about selection |
+|---|---|---|
+| <img src="docs/screenshots/sidebar.png" width="210" alt="Sidebar overview" /> | <img src="docs/screenshots/chat0.png" width="205" alt="Chat with tool actions (top)" /><br/><img src="docs/screenshots/chat1.png" width="205" alt="Chat with tool actions (bottom)" /> | <img src="docs/screenshots/ask-menu.png" width="300" alt="Editor right-click Ask DSH" /> |
+
+## Installation
+
+> Requires Windows / macOS / Linux + VS Code `^1.90.0`. DSH itself does not need to be installed separately — the extension auto-starts one when none is running.
+
+**Option A — Release package (recommended)**
+
+1. Download the latest `dsh-vsc-<version>.vsix` from [Releases](https://github.com/zhibailu/dsh-vsc/releases).
+2. Install it (VS Code `Ctrl+Shift+P` → **Install from VSIX**, or command line):
+
+   ```bash
+   code --install-extension dsh-vsc-<version>.vsix --force
+   ```
+
+3. Reload the window (`Ctrl+Shift+P` → **Reload Window**), then click the **DSH** icon in the left activity bar.
+
+> Existing harnesses are reused automatically (`npm i -g @deepseek-ai/dsh` or a running `npx @deepseek-ai/dsh web`), default `http://127.0.0.1:3080`, overridable with `DSH_WEB_URL` or the `dshVsc.url` setting.
+
+**Option B — from source**
 
 ```bash
 git clone https://github.com/zhibailu/dsh-vsc.git
 cd dsh-vsc
 npm install
-npm run package     # esbuild 构建 + vsce 打包，产出 dsh-vsc-<版本号>.vsix
-code --install-extension dsh-vsc-<版本号>.vsix --force
+npm run package        # esbuild build + vsce package → dsh-vsc-<version>.vsix
+code --install-extension dsh-vsc-<version>.vsix --force
 ```
 
-## 使用
+## Quick start
 
-1. **重载窗口**（Ctrl+Shift+P → Reload Window）——装完必须重载才生效
-2. 左侧活动栏点 **DSH** 图标打开侧边栏
-3. 没有 harness 在跑时，扩展会自动静默拉起一个（窗口不弹出）；已有则直接复用
-4. 发消息，看 agent 干活
+1. **Reload the window** — required after install.
+2. Click the **DSH** icon in the left activity bar to open the sidebar.
+3. If no harness is running, the extension silently starts one (no window pops up); if one is running, it reuses it.
+4. Send a message and watch the agent work.
 
-**API key 不用在扩展里配**：key 在 dsh 侧配置（第一次 `dsh web` 时按提示设置）。扩展是 harness 的共享客户端，不碰你的 key。
+**No API key needed in the extension.** Your key stays on the DSH side (configured the first time you run `dsh web`). The extension is a shared client and never touches your key.
 
-## 截图
+## How it works
 
-**① 侧边栏概览** —— 左侧活动栏 DSH 图标打开原生侧边栏面板
+DSH exposes two things: an **RPC interface** (`POST /api/<method>`) and a **real-time event stream** (`/api/events.mux`). The web GUI is just one consumer of that contract.
 
-<img src="docs/screenshots/sidebar.png" width="210" alt="侧边栏概览" />
+`dsh-vsc` is a second consumer:
 
-**② 对话与工具动作** —— 流式回复、思考折叠、「⚙ 动作」相邻工具合并块、每轮实时计时（上 / 下两张）
+- **`src/harness/client.ts` — a ~200-line minimal protocol client.** It reimplements the DSH wire contract in Node (≥ 18, global `fetch`), imports **no** DSH internals, and is deliberately thin — it implements the protocol, not the plugin framework.
+- **Lossless events.** The panel receives the **raw frames** from the event stream with no re-modeling; rendering is the panel's job. The bridge stays transparent, so it can't drift from DSH's semantics.
+- **Protocol-first, UI-agnostic.** DSH's official README notes there is *no protocol version field because client and host ship together* — until an independently released client exists. This extension is exactly such an independently released client, standing on the stable **contract** layer rather than the volatile **UI** layer.
+- **The one deliberate exception — `overlay`.** Four capabilities the protocol doesn't expose (`clientCount`, hidden tool consoles) are provided by an **in-memory runtime patch** with three safety rails: it mutates only loaded memory (official files stay byte-identical on disk), it **verifies SHA-256** of the official files and bails entirely on mismatch, and it checks **canary anchors** before patching, degrading gracefully on any failure. It has an explicit retirement path (remove each delta once DSH ships the equivalent field, e.g. `hostInstanceId`).
+- **Second client, never a second server.** A real incident showed two DSH processes sharing `~/.dsh` corrupt each other's history (`corrupt session log: seq gap`). So the extension never starts a second server on an existing history: it reuses a live harness, auto-starts one only when none is reachable, and shuts it down by **reference count** (queries `host.describe` for `clientCount` before stopping) so it never kills a harness another client is attached to.
 
-| 上 | 下 |
+A full, reader-friendly deep-dive — written for someone who doesn't know the domain — lives in [docs/design.md](docs/design.md).
+
+## Design philosophy — "pure bridge"
+
+> **I don't take DSH's job; I'm its best client.**
+
+- **Don't rewrite DSH** → stays byte-identical; its stability is yours, its upgrades don't force you to rewrite.
+- **Don't copy DSH's UI framework** → re-implementing a plugin system neither flatters DSH nor helps you.
+- **Don't start a second DSH** → two processes sharing one history corrupt each other.
+- When you *must* patch (overlay), make it **verifiable and degradable** — verify, guard with canaries, fail safe, retire when upstream catches up.
+
+## Commands
+
+| Command | What it does |
 |---|---|
-| <img src="docs/screenshots/chat0.png" width="205" alt="对话（上）" /> | <img src="docs/screenshots/chat1.png" width="205" alt="对话（下）" /> |
+| `DSH: Open Sidebar` | Focus the DSH sidebar |
+| `DSH: Start Web Harness` | Start/connect the harness explicitly (clears the "don't respawn" latch) |
+| `DSH: Stop Auto-started Harness` | Stop only the instance *this* extension started; never a shared one |
+| `DSH: Refresh Connection Status` | Re-probe the harness |
+| `DSH: Open Web GUI (advanced)` | Open the full embedded DSH web GUI as a tab |
+| `DSH: Ask about selection` | Ask DSH about the selected code (also in the right-click menu) |
+| `DSH: Review Agent Changes` | Open a native git diff of the files the agent changed |
 
-**③ 编辑器右键 Ask DSH** —— 选中代码后右键 → 菜单底部 "DSH: Ask about selection"
+## Configuration
 
-<img src="docs/screenshots/ask-menu.png" width="300" alt="右键 Ask DSH" />
+| Setting | Default | Description |
+|---|---|---|
+| `dshVsc.url` | `http://127.0.0.1:3080` | Base URL of the DSH harness. Also honors `DSH_WEB_URL`. |
+| `dshVsc.autoStart` | `true` | Auto-start `dsh web` when no harness answers at the configured URL. |
 
-## 功能
+## What is deliberately out of scope
 
-- 侧边栏内嵌真实 DSH Web GUI（会话、模型、MCP 工具、热更新与浏览器一致）
-- 原生桥：
-  - **Ask DSH（选区）**：编辑器选中代码 → 右键 → **面板内弹出 Ask 卡片**（解释 / 审查 / 修复 / 自定义），结构化上下文（文件/选区/工作区/分支）送入最新会话
-  - **Review Agent Changes**：监控 `write`/`edit`/`str_replace_editor` 工具调用，回合结束提示改动数，一键打开 VS Code 原生 git diff
-- 原生侧边栏面板：
-  - 每轮实时计时、相邻工具动作合并成「⚙ 动作」折叠块、思考（reasoning）折叠、`+N-M` 改动统计
-  - **审批卡片**：agent 请求执行需审批的操作 → 面板弹出审批卡片 → 允许一次 / 拒绝
-  - **选择题卡片**：agent 调用提问工具 → 面板弹出选择题（单选序号 / 多选勾选 / 推荐徽章 / 自定义回答 ↑↓ 找回 / 跳过），回答经 `/api/respond` 回传
-  - **模式选择（新建会话）**：header ＋ 打开模式下拉（标准 / PTC / 极简 / 创造），悬停显示官方说明，按所选 agent preset 创建会话
-  - **推理等级切换**：header 模型选择器旁的下拉（随模型刷新）
-  - **权限预设切换**：header 下拉，实时拉取 `agentPreset.list` 实际可用预设
-  - 提问时**主输入栏整体隐藏**（composer takeover），防止误发消息
+- No rewritten chat UI, no event truncation/whitelisting, no API-key re-entry.
+- No second harness — reuse a running one, auto-start only when none exists; auto-started instances survive closing VS Code if other clients are attached.
+- Change tracking covers only `write` / `edit` / `str_replace_editor` tool events; files changed via a shell are not counted (git diff review still works manually).
+- The `+N-M` counter covers only those file tools; the timer is display-only on the bridge side (latest in-flight round; finalized to history when the task ends).
+- Ask DSH sends to the **most recently updated** session (not necessarily the one currently open in the webview).
+- Approval/question cards appear only for the **currently selected** session.
 
-## 边界
-
-- 不重写聊天 UI（嵌入真实前端）；不截断/白名单事件；不要求重输 API key
-- 不另起第二个 harness（发现到运行中的就复用，只有没有才自拉；关 VS Code 时若还有其他客户端连着，自拉实例会保留）
-- 改动追踪只识别 `write`/`edit`/`str_replace_editor` 工具事件；shell 里改文件不计入（git diff 审查仍可手工用）
-- `+N-M` 统计同样只覆盖上述文件工具；`write` 的旧内容为调用瞬间磁盘估算，工具结果自带的 `meta.diffs` 会修正
-- 计时器是桥接侧纯展示：只挂最新进行中的一轮，任务结束即固化为历史用时
-- Ask DSH 发送到"最近更新的会话"（非空白），不看 webview 当前打开哪个会话
-- 审批/选择题只在**当前选中会话**弹出（其他会话的交互帧不打扰当前视图）
-
-## 开发
+## Development
 
 ```bash
 npm install
-npm run typecheck   # tsc --noEmit
+npm run typecheck   # tsc --noEmit (both configs)
 npm run build       # esbuild → dist/extension.js + dist/media
-npm run package     # 打包 vsix
+npm run package     # build + package vsix
 ```
 
-F5 调试（`.vscode/launch.json`）→ Extension Development Host。
+F5 debug via [`.vscode/launch.json`](.vscode/launch.json) → Extension Development Host.
 
-自动回归测试（jsdom 模拟 webview，喂真实事件流验证面板渲染）：
+Automated regression test (jsdom simulates the webview, feeds real event streams to verify panel rendering):
 
 ```bash
 node scratch/auto-test.mjs <sessionId> <turnNo>
 ```
 
-## 许可证
+## Documentation
 
-MIT © 2026 zhibailu — 详见 [LICENSE](LICENSE)。
+- [Design & philosophy deep-dive](docs/design.md) — the "pure bridge" soul, from zero domain knowledge to defending it.
+- [Source map](src/README.md) — what lives where in `src/`.
+- [Screenshots](docs/screenshots/) — image assets used by this README.
+- [`llms.txt`](llms.txt) — machine-readable doc index for LLM / AI crawlers.
+- [`AGENTS.md`](AGENTS.md) — onboarding guide for AI coding agents working in the repo.
+- [Changelog](CHANGELOG.md) — release history.
+- For maintainers: [GITHUB-SETUP.md](GITHUB-SETUP.md) — repo metadata & topics to set on GitHub for discoverability.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). We welcome issues, PRs, and docs improvements — especially anything that clarifies the architecture for newcomers.
+
+## License
+
+MIT © 2026 zhibailu — see [LICENSE](LICENSE).

@@ -1,0 +1,26 @@
+# DSH Bridge (dsh-vsc)
+
+> DSH Bridge is a VS Code extension that connects to DeepSeek Harness (DSH) — a local AI agent service — as a **protocol client**. It provides a native sidebar panel plus an editor bridge (ask-about-selection, review-agent-changes) without rewriting DSH or starting a second server. It is a "pure bridge": it consumes DSH's wire contract, not its UI, so it stays robust when DSH updates. Includes a small in-memory runtime patch (overlay) with SHA-256 verification and canary anchors for the few capabilities the protocol does not expose.
+
+## Docs
+
+- [README.md](README.md): Project overview, features, installation, quick start, architecture, configuration, boundaries. (English)
+- [README.zh.md](README.zh.md): 中文版项目说明。
+- [docs/design.md](docs/design.md): Deep architecture & "pure bridge" philosophy — written from zero domain knowledge, with a 90-second explainer and Q&A for skeptics.
+- [src/README.md](src/README.md): Source tree map — what lives in `src/editor`, `src/events`, `src/harness`, `src/panel`.
+- [src/harness/README.md](src/harness/README.md): Harness client / discovery / launcher notes.
+- [src/harness/overlay/README.md](src/harness/overlay/README.md): The in-memory runtime overlay (the one deliberate crossing).
+- [CONTRIBUTING.md](CONTRIBUTING.md): How to build, test, and contribute.
+
+## Key source files
+
+- [src/harness/client.ts](src/harness/client.ts): ~200-line minimal protocol client (no DSH internals).
+- [src/harness/protocol.ts](src/harness/protocol.ts): Wire-contract types & endpoint names (single source of truth).
+- [src/panel/protocol.ts](src/panel/protocol.ts): Panel message protocol — events forwarded losslessly.
+- [src/harness/overlay/deltas.ts](src/harness/overlay/deltas.ts): The 4 overlay deltas (source of truth).
+- [src/harness/overlay/loader.ts](src/harness/overlay/loader.ts): ESM in-memory loader (swap source, log, degrade).
+- [src/harness/overlay/pristine.ts](src/harness/overlay/pristine.ts): Official SHA-256 table + integrity self-check.
+- [src/harness/launcher.ts](src/harness/launcher.ts): Start DSH (NODE_OPTIONS injection, PID record).
+- [src/extension.ts](src/extension.ts): Activation/shutdown logic (reference-counted harness stop).
+- [src/panel/NativePanelProvider.ts](src/panel/NativePanelProvider.ts): The native sidebar panel provider.
+- [src/panel/native/panel.html](src/panel/native/panel.html): The hand-built panel UI.
