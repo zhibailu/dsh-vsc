@@ -64,19 +64,33 @@ If you already use DSH (web GUI or CLI) and you work in VS Code, `dsh-vsc` turns
 
 ## Screenshots
 
-**Sidebar — native DSH panel** (session list, streaming reply, input)
+**Sidebar & chat** — the native DSH panel: session list, streaming reply, collapsible "⚙ Actions", per-turn timing, `+N-M` stats
 
-<p align="center"><img src="docs/screenshots/sidebar.png" width="300" alt="DSH sidebar panel" /></p>
-
-**Chat & tool actions** — streaming reply, collapsible "⚙ Actions", per-turn timing, `+N-M` change stats
-
-<p align="center"><img src="docs/screenshots/chat0.png" width="300" alt="Chat with tool actions (top)" /><br /><img src="docs/screenshots/chat1.png" width="300" alt="Chat with tool actions (bottom)" /></p>
+<p align="center"><img src="docs/screenshots/sidebar.png" width="290" alt="DSH sidebar and chat" /></p>
 
 **Ask about selection** — select code in the editor, right-click → *DSH: Ask about selection*
 
-<p align="center"><img src="docs/screenshots/ask-menu.png" width="340" alt="Editor right-click Ask DSH" /></p>
+<p align="center"><img src="docs/screenshots/ask-menu.png" width="380" alt="Ask about selection menu" /></p>
 
-> More screenshots (approval & question cards, mode picker, Review Agent Changes) are on the way — see [docs/screenshots/](docs/screenshots/) for the shot list.
+**Ask card** — structured context card (file / selection / workspace / branch) shown in the panel
+
+<p align="center"><img src="docs/screenshots/ask-card.png" width="290" alt="Ask card in the panel" /></p>
+
+**Approval card** — allow once / deny when the agent requests a privileged operation
+
+<p align="center"><img src="docs/screenshots/approval.png" width="460" alt="Approval card" /></p>
+
+**Question card** — single / multi choice, recommended badge, custom answer
+
+<p align="center"><img src="docs/screenshots/question.png" width="290" alt="Question card" /></p>
+
+**Review Agent Changes** — changed files per turn → native git diff
+
+<p align="center"><img src="docs/screenshots/review.png" width="440" alt="Review Agent Changes" /></p>
+
+**Session modes** — standard / PTC / minimal / creative
+
+<p align="center"><img src="docs/screenshots/mode-picker.png" width="400" alt="Session mode picker" /></p>
 
 ## Installation
 

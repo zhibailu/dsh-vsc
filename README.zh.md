@@ -64,19 +64,33 @@
 
 ## 截图
 
-**侧边栏——原生 DSH 面板**（会话列表、流式回复、输入框）
+**侧边栏与对话**——原生 DSH 面板：会话列表、流式回复、可折叠的「⚙ 动作」、每轮实时计时、`+N-M` 统计
 
-<p align="center"><img src="docs/screenshots/sidebar.png" width="300" alt="DSH 侧边栏面板" /></p>
-
-**对话与工具动作**——流式回复、可折叠的「⚙ 动作」、每轮实时计时、`+N-M` 改动统计
-
-<p align="center"><img src="docs/screenshots/chat0.png" width="300" alt="对话与工具动作（上）" /><br /><img src="docs/screenshots/chat1.png" width="300" alt="对话与工具动作（下）" /></p>
+<p align="center"><img src="docs/screenshots/sidebar.png" width="290" alt="DSH 侧边栏与对话" /></p>
 
 **右键提问**——在编辑器里选中代码，右键 → *DSH: Ask about selection*
 
-<p align="center"><img src="docs/screenshots/ask-menu.png" width="340" alt="编辑器右键 Ask DSH" /></p>
+<p align="center"><img src="docs/screenshots/ask-menu.png" width="380" alt="右键 Ask DSH 菜单" /></p>
 
-> 更多截图（审批 / 选择题卡片、模式选择、Review Agent Changes）在补充中——拍摄清单见 [docs/screenshots/](docs/screenshots/)。
+**Ask 卡片**——面板里弹出的结构化上下文卡片（文件 / 选区 / 工作区 / 分支）
+
+<p align="center"><img src="docs/screenshots/ask-card.png" width="290" alt="面板中的 Ask 卡片" /></p>
+
+**审批卡片**——agent 请求执行需审批的操作时，允许一次 / 拒绝
+
+<p align="center"><img src="docs/screenshots/approval.png" width="460" alt="审批卡片" /></p>
+
+**选择题卡片**——单选 / 多选、推荐徽章、自定义回答
+
+<p align="center"><img src="docs/screenshots/question.png" width="290" alt="选择题卡片" /></p>
+
+**Review Agent Changes**——每轮改动的文件 → 一键打开原生 git diff
+
+<p align="center"><img src="docs/screenshots/review.png" width="440" alt="Review Agent Changes" /></p>
+
+**会话模式**——标准 / PTC / 极简 / 创造
+
+<p align="center"><img src="docs/screenshots/mode-picker.png" width="400" alt="会话模式选择" /></p>
 
 ## 安装
 
