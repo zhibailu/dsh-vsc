@@ -64,9 +64,19 @@ If you already use DSH (web GUI or CLI) and you work in VS Code, `dsh-vsc` turns
 
 ## Screenshots
 
-| Sidebar overview | Chat & tool actions | Ask about selection |
-|---|---|---|
-| <img src="docs/screenshots/sidebar.png" width="210" alt="Sidebar overview" /> | <img src="docs/screenshots/chat0.png" width="205" alt="Chat with tool actions (top)" /><br/><img src="docs/screenshots/chat1.png" width="205" alt="Chat with tool actions (bottom)" /> | <img src="docs/screenshots/ask-menu.png" width="300" alt="Editor right-click Ask DSH" /> |
+**Sidebar — native DSH panel** (session list, streaming reply, input)
+
+<p align="center"><img src="docs/screenshots/sidebar.png" width="300" alt="DSH sidebar panel" /></p>
+
+**Chat & tool actions** — streaming reply, collapsible "⚙ Actions", per-turn timing, `+N-M` change stats
+
+<p align="center"><img src="docs/screenshots/chat0.png" width="300" alt="Chat with tool actions (top)" /><br /><img src="docs/screenshots/chat1.png" width="300" alt="Chat with tool actions (bottom)" /></p>
+
+**Ask about selection** — select code in the editor, right-click → *DSH: Ask about selection*
+
+<p align="center"><img src="docs/screenshots/ask-menu.png" width="340" alt="Editor right-click Ask DSH" /></p>
+
+> More screenshots (approval & question cards, mode picker, Review Agent Changes) are on the way — see [docs/screenshots/](docs/screenshots/) for the shot list.
 
 ## Installation
 
@@ -174,7 +184,7 @@ node scratch/auto-test.mjs <sessionId> <turnNo>
 
 ## Documentation
 
-- [Design & philosophy deep-dive](docs/design.md) — the "pure bridge" soul, from zero domain knowledge to defending it.
+- [Design & architecture rationale](docs/design.md) — why the "pure bridge" approach, how it stays robust across DSH upgrades, and how the pieces fit.
 - [Source map](src/README.md) — what lives where in `src/`.
 - [Screenshots](docs/screenshots/) — image assets used by this README.
 - [`llms.txt`](llms.txt) — machine-readable doc index for LLM / AI crawlers.

@@ -9,7 +9,7 @@
 ## 放这里 ✅
 
 - `screenshots/` — README 引用的截图（sidebar.png / chat.png / ask-menu.png）
-- `design.md` — 「纯桥接」架构哲学深度理解稿（设计灵魂 / 认可视角 / 对外讲故事）
+- `design.md` — 架构与设计说明（为什么「纯桥接」、如何保持稳定、对外讲述用）
 - 用户指南、FAQ、配置说明等面向使用者的文档
 
 ## 不放这里 ❌

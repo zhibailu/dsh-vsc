@@ -64,9 +64,19 @@
 
 ## 截图
 
-| 侧边栏概览 | 对话与工具动作 | 右键提问 |
-|---|---|---|
-| <img src="docs/screenshots/sidebar.png" width="210" alt="侧边栏概览" /> | <img src="docs/screenshots/chat0.png" width="205" alt="对话（上）" /><br/><img src="docs/screenshots/chat1.png" width="205" alt="对话（下）" /> | <img src="docs/screenshots/ask-menu.png" width="300" alt="编辑器右键 Ask DSH" /> |
+**侧边栏——原生 DSH 面板**（会话列表、流式回复、输入框）
+
+<p align="center"><img src="docs/screenshots/sidebar.png" width="300" alt="DSH 侧边栏面板" /></p>
+
+**对话与工具动作**——流式回复、可折叠的「⚙ 动作」、每轮实时计时、`+N-M` 改动统计
+
+<p align="center"><img src="docs/screenshots/chat0.png" width="300" alt="对话与工具动作（上）" /><br /><img src="docs/screenshots/chat1.png" width="300" alt="对话与工具动作（下）" /></p>
+
+**右键提问**——在编辑器里选中代码，右键 → *DSH: Ask about selection*
+
+<p align="center"><img src="docs/screenshots/ask-menu.png" width="340" alt="编辑器右键 Ask DSH" /></p>
+
+> 更多截图（审批 / 选择题卡片、模式选择、Review Agent Changes）在补充中——拍摄清单见 [docs/screenshots/](docs/screenshots/)。
 
 ## 安装
 
@@ -116,7 +126,7 @@ DSH 对外暴露两样东西：**RPC 接口**（`POST /api/<method>`）和**实�
 - **唯一的例外 —— `overlay`**：协议没暴露的 4 个能力（`clientCount`、隐藏工具控制台）由**内存运行时补丁**提供，并上了三把锁——只改内存、磁盘官方文件一行不碰；启动时校验官方文件 **SHA-256**，对不上整体放弃；patch 前查**金丝雀锚点**，找不到就降级。且有明确退役路线（等官方补上对应字段，如 `hostInstanceId`，就删对应 delta）。
 - **第二个客户端，绝不做第二个服务端**：真实事故证明，两个 DSH 进程共用 `~/.dsh` 会互相写坏历史（`corrupt session log: seq gap`）。所以扩展绝不另起一个服务端去写同一份历史：能复用就复用，只有确实没有才自拉，关闭时用**引用计数**（问 `host.describe` 的 `clientCount`）决定停不停，绝不错杀正在被别人用着的 harness。
 
-给完全不懂这个领域的人写的、能脱稿也能反击质疑的深度理解稿，见 [docs/design.md](docs/design.md)。
+给想理解这套设计的人写的完整架构说明，见 [docs/design.md](docs/design.md)。
 
 ## 设计哲学——「纯桥接」
 
@@ -174,7 +184,7 @@ node scratch/auto-test.mjs <sessionId> <turnNo>
 
 ## 文档
 
-- [设计与哲学深度理解稿](docs/design.md)——「纯桥接」的灵魂，从零领域知识讲到能防守质疑。
+- [设计与架构说明](docs/design.md)——为什么采用「纯桥接」、如何应对 DSH 升级保持稳定、各模块如何配合。
 - [源码地图](src/README.md)——`src/` 里各目录管什么。
 - [截图](docs/screenshots/)——本 README 用到的图片素材。
 - [`llms.txt`](llms.txt)——给 LLM / AI 抓取器用的机器可读文档索引。
