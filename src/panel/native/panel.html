@@ -336,6 +336,7 @@
   .in-btn.danger { background: rgba(244,76,76,.12); color: var(--err); border-color: var(--err); }
   .in-btn.danger:hover:not(:disabled) { background: rgba(244,76,76,.2); }
   .in-btn:disabled { opacity: .4; cursor: default; }
+  #in-submit[hidden] { display: none; } /* submit only on the last question */
   .in-spacer { flex: 1; }
   .in-custom-row { display: flex; gap: 6px; margin-top: 8px; align-items: stretch;
                    border: 1px solid var(--border); border-radius: 6px; padding: 0 8px;
@@ -2513,31 +2514,26 @@
   function updateInteractionButtons() {
     var st = interactState;
     if (!st) return;
-    var hasAnswer = false;
-    if (st.kind === "question") {
-      for (var qi in st.selections) {
-        if (st.selections[qi].size > 0) { hasAnswer = true; break; }
-      }
-      if (!hasAnswer && st.custom) {
-        for (var cqi in st.custom) { if (st.custom[cqi].trim()) { hasAnswer = true; break; } }
-      }
-      if (!hasAnswer && st.skipped) {
-        for (var sq in st.skipped) { if (st.skipped[sq]) { hasAnswer = true; break; } }
-      }
-    } else {
-      hasAnswer = true; // approval: buttons are always actionable
-    }
     var submitBtn = $("in-submit");
     if (!submitBtn) return;
-    // Primary button label + enablement depend on which page we're on. On the
-    // LAST question it is "提交" and requires ≥1 answer; on earlier questions it
-    // is "下一步" and is ALWAYS enabled (lets the user skip ahead / leave it blank).
     if (st.kind === "question") {
       var qsNow = (state.interact && state.interact.questions) || [];
       var pagesNow = Math.max(1, Math.ceil(qsNow.length / QUESTION_PAGE_SIZE));
       var onLast = interactState.page >= pagesNow - 1;
-      submitBtn.textContent = onLast ? "提交" : "下一步";
-      submitBtn.disabled = onLast ? !hasAnswer : false;
+      // "提交" only exists on the LAST question; earlier pages have just the
+      // pager arrows (no next/submit button at all).
+      submitBtn.hidden = !onLast;
+      // Always require an answer to submit (a single-select auto-reaches the
+      // last page with an answer; a multi-select/custom needs one here).
+      var lastAnswered = false;
+      var lastSel = interactState.selections[String(pagesNow - 1)];
+      if (lastSel && lastSel.size > 0) lastAnswered = true;
+      if (!lastAnswered) {
+        var lastCustom = interactState.custom && interactState.custom[String(pagesNow - 1)];
+        if (lastCustom && lastCustom.trim()) lastAnswered = true;
+      }
+      submitBtn.textContent = "提交";
+      submitBtn.disabled = !lastAnswered;
     } else {
       submitBtn.textContent = "允许一次"; // not used for approval
     }
@@ -2560,13 +2556,13 @@
       // Paginated questions: show PER_PAGE per page, prev/next flips in place and
       // PRESERVES state. Each question gets its OWN multi-line custom answer
       // (interactState.custom is a {qi: text} map, not one global string).
+      // One question per page; the ONLY secondary action is the ‹ › pager arrows
+      // (callers can freely move back/forward). There is no "next" primary button:
+      // single-select auto-advances, multi-select/custom advance via the next
+      // arrow, and a plain "提交" button appears ONLY on the last question.
       inner = '<div class="in-card"><div class="in-head">' + tag + ' agent 向你提问</div>' +
         '<div id="in-questions"></div>' +
         '<div class="in-actions">' +
-        // The primary button label + behaviour flip with the current page: on
-        // the LAST question it is "提交" (real response); on any earlier question
-        // it is "下一步" (flip to the next question, never submits early — mirrors
-        // the official composer: index === length-1 ? submit : next).
         '<button class="in-btn primary" id="in-submit" disabled>提交</button>' +
         '<span class="in-spacer"></span>' +
         '<button class="in-btn" id="in-cancel">取消</button>' +
@@ -2587,11 +2583,8 @@
     if (rejectBtn) rejectBtn.addEventListener("click", function () { answerInteraction({ outcome: "rejected" }); });
     var submitBtn = $("in-submit");
     if (submitBtn) submitBtn.addEventListener("click", function () {
-      // Page-aware: last question submits, earlier ones advance (never early submit).
-      var qsNow = (state.interact && state.interact.questions) || [];
-      var pagesNow = Math.max(1, Math.ceil(qsNow.length / QUESTION_PAGE_SIZE));
-      if (interactState.page >= pagesNow - 1) { answerInteraction({ submit: true }); }
-      else { interactState.page++; renderQuestionPage(state.interact); updateInteractionButtons(); }
+      // "提交" only shows on the last question; it ALWAYS submits.
+      answerInteraction({ submit: true });
     });
     var cancelBtn2 = $("in-cancel");
     if (cancelBtn2) cancelBtn2.addEventListener("click", function () {
@@ -2736,7 +2729,8 @@
         updateInteractionButtons();
       });
       ta.addEventListener("keydown", function (e) {
-        // Enter advances (next on non-last, submit on last), Shift+Enter newline.
+        // Enter advances to the next question (Shift+Enter newline); on the last
+        // question it submits. Mirrors the pager arrow / single-select behavior.
         if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
           e.preventDefault();
           var qsK = (state.interact && state.interact.questions) || [];
