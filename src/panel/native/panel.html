@@ -337,13 +337,21 @@
   .in-btn.danger:hover:not(:disabled) { background: rgba(244,76,76,.2); }
   .in-btn:disabled { opacity: .4; cursor: default; }
   .in-spacer { flex: 1; }
-  .in-custom-row { display: flex; gap: 6px; margin-top: 8px; align-items: center;
+  .in-custom-row { display: flex; gap: 6px; margin-top: 8px; align-items: stretch;
                    border: 1px solid var(--border); border-radius: 6px; padding: 0 8px;
                    background: var(--bg); }
   .in-custom-row:focus-within { border-color: var(--accent); }
-  .in-custom-icon { flex: none; color: var(--muted); font-size: 12px; }
-  #in-custom-input { flex: 1; background: transparent; color: var(--fg); border: none;
-                     padding: 6px 0; font-family: inherit; font-size: 12px; outline: none; }
+  .in-custom-icon { flex: none; color: var(--muted); font-size: 12px; align-self: center; }
+  .in-custom-input { flex: 1; background: transparent; color: var(--fg); border: none;
+                     padding: 6px 0; font-family: inherit; font-size: 12px; outline: none;
+                     resize: vertical; line-height: 1.45; }
+  /* question pagination — prev/next + "第 x/y 页" */
+  .in-pagenav { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px; }
+  .in-nav { background: var(--input-bg); color: var(--fg); border: 1px solid var(--border);
+            border-radius: 6px; padding: 3px 10px; font-size: 11px; cursor: pointer; font-family: inherit; }
+  .in-nav:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .in-nav:disabled { opacity: .4; cursor: default; }
+  .in-page { flex: 1; text-align: center; font-size: 11px; color: var(--muted); }
 
   /* composer popups (permission / model+effort) — slide up from the input row */
   footer { position: relative; }
@@ -816,11 +824,19 @@
     dirty = true;
     requestAnimationFrame(render);
   }
-  function scrollPos() {
+  // Stick-to-bottom + scroll-away (anti-hijack): `atBottom` is the USER's intent,
+  // updated on every scroll and never re-derived at render time. Once you scroll
+  // away from the bottom it stays false until you explicitly scroll back — so
+  // pausing to read history is NEVER yanked down by new content. (Classic scroll
+  // hijack avoided: single-shot forceBottom is only set on session switch / new msg.)
+  function nearBottom() {
     return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 20;
   }
+  var atBottom = true;
+  function trackStick() { atBottom = nearBottom(); }
   messagesEl.addEventListener("scroll", function () {
-    if (suspended && scrollPos()) {
+    trackStick();
+    if (suspended && atBottom) {
       suspended = false;
       scheduleRender();
     }
@@ -841,7 +857,7 @@
   }
   function render() {
     dirty = false;
-    var stick = forceBottom || scrollPos();
+    var stick = forceBottom || atBottom;
     forceBottom = false;
     if (!stick && state.running) { suspended = true; return; }
     var prevTop = messagesEl.scrollTop;
@@ -881,6 +897,7 @@
     }
     if (stick) {
       messagesEl.scrollTop = messagesEl.scrollHeight;
+      atBottom = true; // keep the follow-intent consistent after a force-jump
     } else {
       // User scrolled away from the bottom (e.g. reading history mid-turn):
       // keep the same content anchored instead of yanking down.
@@ -1302,7 +1319,10 @@
     cp.onclick = function () { post({ type: "copyText", text: text }); };
     w.appendChild(lab);
     w.appendChild(pre);
-    w.appendChild(cp);
+    // Anchor the copy button INSIDE the relative pre (`.tool pre` is position:
+    // relative); as a sibling of an absolute-elsewhere container it would
+    // escape to the card corner and render as an orphan "⧉ 复制".
+    pre.appendChild(cp);
     return w;
   }
   function emptyDiv(html) { var d = document.createElement("div"); d.className = "empty"; d.innerHTML = html; return d; }
@@ -1618,6 +1638,17 @@
     var wasHidden = body.hidden;
     body.hidden = !wasHidden;
     head.textContent = (wasHidden ? "▾" : "▸") + " 思考";
+    // Expanding reveals content below the fold — bring it into view so the user
+    // actually sees the thinking instead of it opening off-screen (and mark the
+    // user's intent as "follow" so a streamed continuation keeps it visible).
+    if (wasHidden) {
+      var boxTop = box.getBoundingClientRect().top;
+      var viewBottom = messagesEl.getBoundingClientRect().bottom;
+      if (boxTop > viewBottom - 8) {
+        box.scrollIntoView({ block: "nearest" });
+        atBottom = true; // user just interacted with live content → re-arm follow
+      }
+    }
     var key = host.getAttribute("data-key");
     var ri = parseInt(head.getAttribute("data-ri") || "0", 10);
     for (var i = 0; i < state.items.length; i++) {
@@ -2298,8 +2329,6 @@
      slide-up popups: perm-btn shows the current permission preset, model-btn
      shows the current model and opens a two-section popup (models + reasoning
      efforts). The top bar now holds only session select + settings + new/delete. */
-  var effortOptions = ["low", "medium", "high"];
-
   function renderPermButton() {
     var presets = state.presets || [];
     if (!presets.length) { permBtnEl.hidden = true; permBtnEl.textContent = ""; return; }
@@ -2395,6 +2424,27 @@
     if (!effortMenuEl.hidden) renderEffortMenu();
   }
 
+  // Reasoning efforts come from the HARNESS (official per-model set), never a
+  // hardcoded list: session.models reports each model's real reasoning.efforts
+  // (off/low/high/max...). Resolve the current model's efforts by provider+model.
+  function currentEfforts() {
+    var cur = state.models && state.models.current;
+    if (!cur) return null;
+    var groups = (state.models && state.models.groups) || [];
+    for (var gi = 0; gi < groups.length; gi++) {
+      var g = groups[gi];
+      if (g.id !== cur.provider) continue;
+      for (var mi = 0; mi < g.models.length; mi++) {
+        var m = g.models[mi];
+        if (m.id !== cur.model) continue;
+        if (m.reasoning && Array.isArray(m.reasoning.efforts) && m.reasoning.efforts.length > 0) {
+          return m.reasoning.efforts;
+        }
+      }
+    }
+    return null;
+  }
+
   function renderEffortMenu() {
     effortMenuEl.innerHTML = "";
     var cur = state.models && state.models.current;
@@ -2404,7 +2454,10 @@
     t.textContent = "推理等级";
     effortMenuEl.appendChild(t);
     var curEffort = cur.reasoningEffort;
-    var opts = effortOptions;
+    // Official efforts for the current model; fall back to the current value
+    // alone (still allows re-selecting it) when the harness reports none.
+    var efforts = currentEfforts();
+    var opts = efforts ? efforts.map(function (e) { return e.id; }) : (curEffort ? [curEffort] : []);
     if (curEffort && opts.indexOf(curEffort) === -1) opts = opts.concat([curEffort]);
     opts.forEach(function (e) {
       var row = document.createElement("div");
@@ -2465,7 +2518,9 @@
       for (var qi in st.selections) {
         if (st.selections[qi].size > 0) { hasAnswer = true; break; }
       }
-      if (!hasAnswer && st.custom && st.custom.trim()) hasAnswer = true;
+      if (!hasAnswer && st.custom) {
+        for (var cqi in st.custom) { if (st.custom[cqi].trim()) { hasAnswer = true; break; } }
+      }
       if (!hasAnswer && st.skipped) {
         for (var sq in st.skipped) { if (st.skipped[sq]) { hasAnswer = true; break; } }
       }
@@ -2490,33 +2545,11 @@
     } else {
       var isReview = msg.questions.some(function (q) { return q.intent && q.intent.kind === "plan-review"; });
       var tag = isReview ? '<span class="in-tag">计划审批</span>' : '<span class="in-tag">选择题</span>';
-      inner = '<div class="in-card"><div class="in-head">' + tag + ' agent 向你提问</div>';
-      msg.questions.forEach(function (q, qi) {
-        inner += '<div class="in-q" data-qi="' + qi + '">' +
-          '<div class="in-qhead"><div class="in-qtext">' + esc(q.question) + '</div>' +
-          '<button class="in-skip" data-qi="' + qi + '" title="跳过此题">跳过</button></div>' +
-          (q.header ? '<div class="in-qheader">' + esc(q.header) + '</div>' : "") +
-          (q.detail ? '<div class="in-qdetail">' + esc(q.detail) + '</div>' : "") +
-          '<div class="in-opts">' +
-          (q.options || []).map(function (o, oi) {
-            var disp = parseRecommendedLabel(o.label);
-            var chip = q.multiSelect
-              ? '<span class="in-check">✓</span>'
-              : '<span class="in-num">' + (oi + 1) + '</span>';
-            return '<button class="in-opt" data-qi="' + qi + '" data-oi="' + oi + '">' + chip +
-              '<span class="in-ocopy"><span class="in-oline">' +
-              '<span class="in-olabel">' + esc(disp.label) + '</span>' +
-              (disp.recommended ? '<span class="in-badge">推荐</span>' : "") +
-              '</span>' +
-              (o.description ? '<span class="in-odesc">' + esc(o.description) + '</span>' : "") +
-              '</span></button>';
-          }).join("") +
-          '</div>' +
-          '</div>';
-      });
-      inner += '<div class="in-custom-row" id="in-custom-row">' +
-        '<span class="in-custom-icon">✎</span>' +
-        '<input id="in-custom-input" placeholder="自定义回答…（可选）" /></div>' +
+      // Paginated questions: show PER_PAGE per page, prev/next flips in place and
+      // PRESERVES state. Each question gets its OWN multi-line custom answer
+      // (interactState.custom is a {qi: text} map, not one global string).
+      inner = '<div class="in-card"><div class="in-head">' + tag + ' agent 向你提问</div>' +
+        '<div id="in-questions"></div>' +
         '<div class="in-actions">' +
         '<button class="in-btn primary" id="in-submit" disabled>提交</button>' +
         '<span class="in-spacer"></span>' +
@@ -2528,7 +2561,7 @@
     interactState = {
       kind: msg.kind, rpcId: msg.rpcId, sessionId: msg.sessionId,
       approvalId: msg.approvalId || null,
-      selections: {}, custom: "", skipped: {}
+      selections: {}, custom: {}, skipped: {}, page: 0
     };
     lockMainInput(); // composer takeover while the question is pending
     // wire the buttons
@@ -2543,120 +2576,151 @@
       state.interact = null; interactEl.hidden = true; interactState = null;
       unlockMainInput();
     });
-    // skip per question (web composer: skipped questions answer with
-    // {id, selected:[]} — the asker decides how to treat a skip)
-    interactEl.querySelectorAll(".in-skip").forEach(function (b) {
+    // If this is a question, render the (paginated) question set now.
+    if (msg.kind === "question") {
+      renderQuestionPage(msg);
+    }
+    updateInteractionButtons();
+  }
+
+  /* ---------- paginated question rendering (one question per page — mirrors
+     the official QuestionComposer, which renders questions[index] one at a
+     time. A single-select auto-advances to the next question; the LAST question
+     is the submit; multi-select stays and lets the user advance manually.) ---------- */
+  var QUESTION_PAGE_SIZE = 1;
+  function renderQuestionPage(msg) {
+    var qs = (msg && msg.questions) || [];
+    var total = qs.length;
+    var pages = Math.max(1, Math.ceil(total / QUESTION_PAGE_SIZE));
+    if (interactState.page >= pages) interactState.page = pages - 1;
+    if (interactState.page < 0) interactState.page = 0;
+    var start = interactState.page * QUESTION_PAGE_SIZE;
+    var end = Math.min(start + QUESTION_PAGE_SIZE, total);
+    var box = $("in-questions");
+    if (!box) return;
+    var html = "";
+    if (pages > 1) {
+      html += '<div class="in-pagenav">' +
+        '<button class="in-nav" id="in-prev"' + (interactState.page === 0 ? " disabled" : "") + '>‹ 上一页</button>' +
+        '<span class="in-page">第 ' + (interactState.page + 1) + ' / ' + pages + ' 页</span>' +
+        '<button class="in-nav" id="in-next"' + (interactState.page === pages - 1 ? " disabled" : "") + '>下一页 ›</button>' +
+        '</div>';
+    }
+    for (var qi = start; qi < end; qi++) {
+      var q = qs[qi];
+      var skipped = !!interactState.skipped[qi];
+      html += '<div class="in-q' + (skipped ? " skipped" : "") + '" data-qi="' + qi + '">' +
+        '<div class="in-qhead"><div class="in-qtext">' + (pages > 1 ? '[' + (qi + 1) + '] ' : '') + esc(q.question) + '</div>' +
+        '<button class="in-skip" data-qi="' + qi + '" title="跳过此题">' + (skipped ? "取消跳过" : "跳过") + '</button></div>' +
+        (q.header ? '<div class="in-qheader">' + esc(q.header) + '</div>' : "") +
+        (q.detail ? '<div class="in-qdetail">' + esc(q.detail) + '</div>' : "") +
+        '<div class="in-opts">' +
+        (q.options || []).map(function (o, oi) {
+          var disp = parseRecommendedLabel(o.label);
+          var chip = q.multiSelect ? '<span class="in-check">✓</span>' : '<span class="in-num">' + (oi + 1) + '</span>';
+          return '<button class="in-opt' + (interactState.selections[qi] && interactState.selections[qi].has(oi) ? " sel" : "") + '" data-qi="' + qi + '" data-oi="' + oi + '">' + chip +
+            '<span class="in-ocopy"><span class="in-oline">' +
+            '<span class="in-olabel">' + esc(disp.label) + '</span>' +
+            (disp.recommended ? '<span class="in-badge">推荐</span>' : "") +
+            '</span>' +
+            (o.description ? '<span class="in-odesc">' + esc(o.description) + '</span>' : "") +
+            '</span></button>';
+        }).join("") +
+        '</div>' +
+        '<div class="in-custom-row">' +
+        '<span class="in-custom-icon">✎</span>' +
+        '<textarea class="in-custom-input" data-qi="' + qi + '" rows="1" placeholder="自定义回答…（可选，Shift+Enter 换行）">' + esc(interactState.custom[qi] || "") + '</textarea>' +
+        '</div>' +
+        '</div>';
+    }
+    box.innerHTML = html;
+
+    // wire pagination
+    var prevBtn = $("in-prev"), nextBtn = $("in-next");
+    if (prevBtn) prevBtn.addEventListener("click", function () {
+      interactState.page--; renderQuestionPage(msg); updateInteractionButtons();
+    });
+    if (nextBtn) nextBtn.addEventListener("click", function () {
+      interactState.page++; renderQuestionPage(msg); updateInteractionButtons();
+    });
+
+    // per-question wiring: skip / option / custom
+    box.querySelectorAll(".in-skip").forEach(function (b) {
       b.addEventListener("click", function () {
         var qi = b.dataset.qi;
-        var skipped = interactState.skipped[qi];
-        if (skipped) {
-          // un-skip
+        if (interactState.skipped[qi]) {
           delete interactState.skipped[qi];
-          b.textContent = "跳过";
-          var qEl = interactEl.querySelector('.in-q[data-qi="' + qi + '"]');
+          var qEl = box.querySelector('.in-q[data-qi="' + qi + '"]');
           if (qEl) qEl.classList.remove("skipped");
+          b.textContent = "跳过";
         } else {
           interactState.skipped[qi] = true;
           var sel = interactState.selections[qi];
           if (sel) sel.clear();
-          var qEl2 = interactEl.querySelector('.in-q[data-qi="' + qi + '"]');
+          var qEl2 = box.querySelector('.in-q[data-qi="' + qi + '"]');
           if (qEl2) {
             qEl2.classList.add("skipped");
             qEl2.querySelectorAll(".in-opt").forEach(function (x) { x.classList.remove("sel"); });
+            var custEl = qEl2.querySelector(".in-custom-input");
+            if (custEl) custEl.value = "";
           }
           b.textContent = "取消跳过";
         }
         updateInteractionButtons();
       });
     });
-    // option toggling (single vs multi) + submit enablement.
-    // custom-answer history is declared first so the option pick (which clears
-    // the input) can remember the draft BEFORE wiping it.
-    var cust = $("in-custom-input");
-    var custHistory = [], custHistoryIndex = -1, custHistoryDraft = "";
-    var rememberCustom = function () {
-      var v = cust ? cust.value.trim() : "";
-      if (v && custHistory[custHistory.length - 1] !== v) custHistory.push(v);
-      if (custHistory.length > 200) custHistory.shift();
-    };
-    var applyCustom = function (v) {
-      if (!cust) return;
-      cust.value = v;
-      interactState.custom = v;
-      // single-select: a non-empty custom answer clears the picked option
-      // (web composer: draftCustom() sets selected:[] for non-multi)
-      var q = msg.questions[0];
-      if (v.trim() !== "" && q && !q.multiSelect) {
-        var sel = interactState.selections["0"];
-        if (sel) {
-          sel.clear();
-          interactEl.querySelectorAll('.in-opt[data-qi="0"]').forEach(function (x) { x.classList.remove("sel"); });
-        }
-      }
-      updateInteractionButtons();
-    };
-    interactEl.querySelectorAll(".in-opt").forEach(function (b) {
+    box.querySelectorAll(".in-opt").forEach(function (b) {
       b.addEventListener("click", function () {
         var qi = b.dataset.qi, oi = b.dataset.oi;
-        var q = msg.questions[Number(qi)];
+        var q = qs[Number(qi)];
+        if (interactState.skipped[qi]) return; // skipped → no edits
         var sel = interactState.selections[qi] || (interactState.selections[qi] = new Set());
         if (sel.has(oi)) { sel.delete(oi); b.classList.remove("sel"); }
         else {
           if (!q.multiSelect) {
-            // remember the custom draft before the pick wipes it, so ↑ can
-            // bring it back if the user changes their mind
-            rememberCustom();
             sel.clear();
-            interactEl.querySelectorAll('.in-opt[data-qi="' + qi + '"]').forEach(function (x) { x.classList.remove("sel"); });
-            // single-select picking an option clears the custom answer
-            // (web composer: choose() sets selected:[label], custom:"")
-            interactState.custom = "";
-            if (cust) cust.value = "";
+            box.querySelectorAll('.in-opt[data-qi="' + qi + '"]').forEach(function (x) { x.classList.remove("sel"); });
+            // single-select picking an option clears this question's custom answer
+            interactState.custom[qi] = "";
+            var custEl = box.querySelector('.in-q[data-qi="' + qi + '"] .in-custom-input');
+            if (custEl) custEl.value = "";
           }
           sel.add(oi); b.classList.add("sel");
+          // Single-select: mirror the official composer — auto-advance to the
+          // next question (unless this is the last one, which is the submit).
+          if (!q.multiSelect && qi < qs.length - 1) {
+            interactState.page++;
+            renderQuestionPage(msg);
+            return;
+          }
         }
         updateInteractionButtons();
       });
     });
-    if (cust) {
-      // CLI-style ↑/↓ history for the custom answer: every committed input
-      // pushes the previous value, so arrow keys can always bring earlier
-      // drafts back (e.g. after an option pick cleared the field) instead of
-      // forcing a retype. Same UX as the main input's history.
-      var lastCustomValue = "";
-      cust.addEventListener("input", function () {
-        var prev = lastCustomValue;
-        lastCustomValue = cust.value;
-        // push the previous value once per edit burst (skip if unchanged)
-        if (prev !== cust.value && prev.trim() !== "" && custHistory[custHistory.length - 1] !== prev) {
-          custHistory.push(prev);
-          if (custHistory.length > 200) custHistory.shift();
+    box.querySelectorAll(".in-custom-input").forEach(function (ta) {
+      ta.addEventListener("input", function () {
+        if (!interactState.custom) interactState.custom = {};
+        var qi = ta.dataset.qi;
+        interactState.custom[qi] = ta.value;
+        var q = qs[Number(qi)];
+        // single-select: a non-empty custom answer clears the picked option
+        if (ta.value.trim() !== "" && q && !q.multiSelect) {
+          var sel = interactState.selections[qi];
+          if (sel) {
+            sel.clear();
+            box.querySelectorAll('.in-opt[data-qi="' + qi + '"]').forEach(function (x) { x.classList.remove("sel"); });
+          }
         }
-        applyCustom(cust.value);
+        updateInteractionButtons();
       });
-      cust.addEventListener("keydown", function (e) {
-        if (e.key === "ArrowUp" && custHistory.length > 0) {
-          e.preventDefault();
-          if (custHistoryIndex === -1) { custHistoryDraft = cust.value; custHistoryIndex = 0; }
-          else custHistoryIndex = Math.min(custHistoryIndex + 1, custHistory.length - 1);
-          applyCustom(custHistory[custHistory.length - 1 - custHistoryIndex]);
-          return;
-        }
-        if (e.key === "ArrowDown") {
-          if (custHistoryIndex === -1) return; // not navigating yet
-          e.preventDefault();
-          custHistoryIndex--;
-          applyCustom(custHistoryIndex === -1 ? custHistoryDraft : custHistory[custHistory.length - 1 - custHistoryIndex]);
-          return;
-        }
+      ta.addEventListener("keydown", function (e) {
+        // Enter submits, Shift+Enter is a newline (mirrors the main composer).
         if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
           e.preventDefault();
-          rememberCustom();
           answerInteraction({ submit: true });
         }
       });
-    }
-    updateInteractionButtons();
+    });
   }
   function answerInteraction(ans) {
     var st = interactState;
@@ -2678,7 +2742,8 @@
           var o = q.options[Number(oi)];
           return o ? o.label : "";
         }).filter(Boolean) : [];
-        var custom = (st.custom || "").trim();
+        // Per-question custom answer (st.custom is a {qi: text} map).
+        var custom = (st.custom && st.custom[qi] ? st.custom[qi] : "").trim();
         // Web composer semantics: on a single-select, a custom answer REPLACES
         // the picked option (selected:[], custom); multi-select keeps both.
         if (custom !== "" && q.multiSelect !== true) selected = [];

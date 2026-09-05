@@ -137,7 +137,7 @@ export type QueueAction =
 export interface ModelCatalog {
   current?: { provider: string; model: string; reasoningEffort?: string };
   routable: boolean;
-  groups: { id: string; name: string; models: { id: string; name: string; description?: string }[] }[];
+  groups: { id: string; name: string; models: { id: string; name: string; description?: string; reasoning?: { efforts: { id: string; name: string }[]; defaultEffort?: string } }[] }[];
   failures: { id: string; name: string; message: string }[];
 }
 

@@ -44,7 +44,11 @@ export type HostMessage =
   | { type: "running"; sessionId: string; running: boolean }
   | { type: "pickedFile"; path: string }
   | { type: "index"; files: string[]; dirs: string[] }
-  | { type: "models"; current?: { provider: string; model: string }; groups: { id: string; name: string; models: { id: string; name: string }[] }[] }
+  | {
+      type: "models";
+      current?: { provider: string; model: string; reasoningEffort?: string };
+      groups: { id: string; name: string; models: { id: string; name: string; reasoning?: { efforts: { id: string; name: string }[]; defaultEffort?: string } }[] }[];
+    }
   | { type: "queue"; sessionId: string; items: { id: string; placement: string; text: string }[] }
   | { type: "commands"; items: { name: string; description?: string; input?: { hint?: string; images?: boolean } }[] }
   | { type: "cmdResult"; text: string; ok: boolean }

@@ -803,7 +803,14 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         groups: catalog.groups.map((g) => ({
           id: g.id,
           name: g.name,
-          models: g.models.map((m) => ({ id: m.id, name: m.name })),
+          models: g.models.map((m) => ({
+            id: m.id,
+            name: m.name,
+            // The harness reports each model's real reasoning efforts (off/low/
+            // high/max...) — carry them through so the effort selector renders
+            // the OFFICIAL set instead of a hardcoded list.
+            ...(m.reasoning ? { reasoning: m.reasoning } : {}),
+          })),
         })),
       });
     } catch (error) {
