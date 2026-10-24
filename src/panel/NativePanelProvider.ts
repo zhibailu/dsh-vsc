@@ -814,6 +814,13 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       let throughSeq = this.stream?.cursorFor(sessionId);
       let projections: Record<string, unknown> | undefined;
       if (beforeSeq === undefined) {
+        // The follow snapshot is the authority for the log cut, and loadHistory
+        // runs right after the session is followed — give the snapshot a moment
+        // to land before falling back to a direct projections read.
+        for (let i = 0; throughSeq === undefined && this.stream !== null && i < 40; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          throughSeq = this.stream?.cursorFor(sessionId);
+        }
         const snapshot = await this.client.projections(sessionId);
         if (snapshot && snapshot.kind === "sequenced") {
           throughSeq = throughSeq ?? snapshot.asOfSeq;
@@ -822,8 +829,20 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           projections = snapshot.values;
         }
       }
+      // Last resort: the host rejects a cut past the log end but names the real
+      // cursor ("session page through seq N is past cursor M"), so retry once
+      // with it instead of guessing a huge number.
       if (throughSeq === undefined) throughSeq = Number.MAX_SAFE_INTEGER;
-      const page = await this.client.page(sessionId, throughSeq, beforeSeq, 30);
+      let page;
+      try {
+        page = await this.client.page(sessionId, throughSeq, beforeSeq, 30);
+      } catch (error) {
+        const text =
+          error instanceof RpcErrorResult ? error.rpcError.message : (error as Error).message;
+        const past = /past cursor (\d+)/i.exec(text);
+        if (!past) throw error;
+        page = await this.client.page(sessionId, Number(past[1]), beforeSeq, 30);
+      }
       const mapped = page.records.map((entry) => entry.event as PanelEvent);
       const hasMore = page.hasMore;
       // Per-call "+N-M" diffs for this page, shipped inside the history frame

@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 - _(nothing yet)_
 
+## [0.3.2] - 2026-10-24
+
+- Fix: history paging no longer guesses the log cut. It waits for the follow snapshot's cursor, and if the host still rejects the cut it retries with the cursor the host names in its own error (`session page through seq N is past cursor M`). Before, a `migration-required` session surfaced as a bare `gateway/bad-request`.
+- Add: `scripts/normalize-session-logs.mjs` — dry-run by default, `--apply` keeps a `.bak` per file, and it strips the single member (`permission/preset.data.origin`) that makes DSH 0.2.x refuse a session written by 0.1.1-rc.1. Verified on four real conversations across four workspace buckets (26–112 events each) after normalization: all read back in full.
+- Measured scope on a real library: 169 logs, **160 refused** before normalization, and **all 87 top-level conversations** are blocked only by that one member; the 82 subagent child logs carry a second blocker (`subagent/descriptor` v2) and stay unreadable — they are hidden sidebar rows anyway.
+
 ## [0.3.1] - 2026-10-24
 
 - Fix: old (0.1.x) session logs now fail with an explicit Chinese explanation instead of a raw `gateway/internal` error. Measured on real logs: DSH 0.2.1 marks them `migration-required` and `dsh-session-format-v0-to-v1` **refuses** them (`permission/preset 0 data has unexpected member "origin"`), so those conversations cannot be opened after the upgrade — core behaviour, not a bridge defect.
