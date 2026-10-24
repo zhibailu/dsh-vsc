@@ -853,6 +853,22 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         toolDiffs: Object.keys(toolDiffs).length > 0 ? toolDiffs : undefined,
       });
     } catch (error) {
+      // Old (0.1.x) logs need a format migration before they can be read, and
+      // the 0.2.1 chain can REFUSE them outright — measured on real 0.1.1 logs:
+      //   gateway/internal: failed to observe session …:
+      //   dsh-session-format-v0-to-v1 refuses this format v0 Session:
+      //   permission/preset 0 data has unexpected member "origin"
+      // That is core behaviour, so say so instead of leaking a gateway/internal
+      // error that reads like a defect in this extension.
+      const text =
+        error instanceof RpcErrorResult ? `${error.rpcError.code}: ${error.rpcError.message}` : (error as Error).message;
+      if (/failed to observe session|refuses this format|migration-required/i.test(text)) {
+        this.post({
+          type: "error",
+          message: `读取历史失败：这个会话是 0.1.x 时代的旧日志，DSH 0.2.x 要先做格式迁移，而本体的迁移链拒绝了它（DSH 本体行为，不是本扩展的问题）。原文：${text}`,
+        });
+        return;
+      }
       this.post({ type: "error", message: describeHarnessFailure("读取历史失败", error) });
     }
   }

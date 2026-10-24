@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 - _(nothing yet)_
 
+## [0.3.1] - 2026-10-24
+
+- Fix: old (0.1.x) session logs now fail with an explicit Chinese explanation instead of a raw `gateway/internal` error. Measured on real logs: DSH 0.2.1 marks them `migration-required` and `dsh-session-format-v0-to-v1` **refuses** them (`permission/preset 0 data has unexpected member "origin"`), so those conversations cannot be opened after the upgrade — core behaviour, not a bridge defect.
+
 ## [0.3.0] - 2026-10-24
 
 **DSH 0.2.1 line (Typert Remote).** Moves the bridge from the 0.1.x wire to 0.2.1-rc.3. **Not backward compatible with 0.1.x harnesses** — old dot-named endpoints answer `404`, with no compatibility alias.
