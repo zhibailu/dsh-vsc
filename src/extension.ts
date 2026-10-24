@@ -8,7 +8,14 @@ import { renderEmbedHtml } from "./panel/embed";
 import { DshStatusBar } from "./status";
 import { HarnessClient } from "./harness/client";
 import { configuredBase, discover, portOf } from "./harness/discover";
-import { startHarness, stopHarness, isRunning as harnessRunning, readPidRecord, HARNESS_PID_FILE } from "./harness/launcher";
+import {
+  startHarness,
+  stopHarness,
+  isRunning as harnessRunning,
+  readLaunchToken,
+  readPidRecord,
+  HARNESS_PID_FILE,
+} from "./harness/launcher";
 import { HarnessEventStream } from "./events/eventStream";
 import { ChangeTracker } from "./editor/changeTracker";
 import { buildSelectionContext } from "./editor/askSelection";
@@ -21,12 +28,6 @@ const RIGHT_VIEW = "dsh.sidebar.right";
 const MAX_SPAWN_FAILURES = 3; // consecutive auto-spawn failures before giving up this session
 const OFFLINE_RECHECK_MS = 15000; // slow poll while down-but-not-our-job (user may start one manually)
 const DISCONNECT_RECHECK_MS = 3000; // grace before probing after the event stream drops
-
-// Module-level handoff for deactivate(): the exit path runs outside activate's
-// closure, so it needs its own reference to the connected client to ask the
-// harness "how many clients are attached?" before deciding whether to stop an
-// instance we spawned.
-let exitClient: HarnessClient | null = null;
 
 export function activate(context: vscode.ExtensionContext): void {
   const log = vscode.window.createOutputChannel("DSH Bridge");
@@ -198,33 +199,121 @@ export function activate(context: vscode.ExtensionContext): void {
   async function refresh(): Promise<void> {
     const d = await discover();
     if (d.alive) {
-      client = new HarnessClient(d.base);
-      exitClient = client;
-      status.setOnline(d.version ?? "?");
-      log.appendLine(`harness connected at ${d.base} (version ${d.version})`);
+      const next = new HarnessClient(d.base);
+      const ok = await authenticate(next, d.base);
+      client = next;
+      status.setOnline(d.version ?? "0.2.1");
+      log.appendLine(
+        `harness connected at ${d.base}${ok ? "" : " (UNAUTHENTICATED — panel actions will fail with 401)"}`
+      );
       panel.setClient(client, d.version);
       ensureStream(d.base);
       return;
     }
     client = null;
-    exitClient = null;
     panel.setClient(null);
     await checkHarness();
   }
 
+  /** Bases we already asked the user about (the token changes per boot, so a
+   *  cancelled prompt must not reopen on every poll). */
+  const authPrompted = new Set<string>();
+
+  /** Accept a bare token or a full `…?token=…` URL. */
+  function tokenFrom(input: string): string | undefined {
+    const match = /[?&]token=([A-Za-z0-9_-]+)/.exec(input);
+    if (match) return match[1];
+    const bare = input.trim();
+    return /^[A-Za-z0-9_-]{16,}$/.test(bare) ? bare : undefined;
+  }
+
+  /**
+   * DSH 0.2.1 fenced every `/api/*` call and the WS handshake behind a signed
+   * cookie minted from the process launch token. A harness WE started hands its
+   * token over on stdout (launcher.ts captures it); one the user started
+   * themselves can only be reached with a token they paste.
+   *
+   * @returns whether the client now holds a cookie.
+   */
+  async function authenticate(next: HarnessClient, base: string): Promise<boolean> {
+    if (next.authenticated) return true;
+    // Our own instance: the token arrives asynchronously on the child's stdout.
+    let launched = readLaunchToken();
+    for (let i = 0; launched === undefined && harnessRunning() && i < 20; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      launched = readLaunchToken();
+    }
+    const configured = vscode.workspace.getConfiguration("dshVsc").get<string>("token")?.trim();
+    const candidates: { token: string; source: "launch" | "config" }[] = [];
+    if (launched) candidates.push({ token: launched, source: "launch" });
+    const fromConfig = configured ? tokenFrom(configured) : undefined;
+    if (fromConfig) candidates.push({ token: fromConfig, source: "config" });
+    for (const candidate of candidates) {
+      try {
+        await next.connect(candidate.token);
+        log.appendLine(`auth: cookie minted from the ${candidate.source} token`);
+        return true;
+      } catch (error) {
+        log.appendLine(`auth: ${candidate.source} token rejected — ${(error as Error).message}`);
+      }
+    }
+    if (authPrompted.has(base)) return false;
+    authPrompted.add(base);
+    const input = await vscode.window.showInputBox({
+      title: "DSH 需要认证（0.2.1 起）",
+      prompt: `请粘贴 ${base} 启动时打印的那条 URL（含 token=…）或 token 本身。本扩展自己启动的服务不需要这一步。`,
+      placeHolder: "http://127.0.0.1:3080/?token=…",
+      ignoreFocusOut: true,
+    });
+    if (!input) return false;
+    const manual = tokenFrom(input);
+    if (!manual) {
+      log.appendLine("auth: pasted value carries no recognisable token");
+      return false;
+    }
+    try {
+      await next.connect(manual);
+      await vscode.workspace.getConfiguration("dshVsc").update("token", manual, vscode.ConfigurationTarget.Global);
+      log.appendLine("auth: cookie minted from the user-supplied token (saved to dshVsc.token)");
+      return true;
+    } catch (error) {
+      log.appendLine(`auth: user token rejected — ${(error as Error).message}`);
+      return false;
+    }
+  }
+
   function ensureStream(base: string): void {
-    if (stream) return;
-    stream = new HarnessEventStream(base);
+    if (stream) {
+      panel.attachStream(stream);
+      return;
+    }
+    // The stream carries the SAME cookie as the RPC client (0.2.1 fences both).
+    stream = new HarnessEventStream(base, () => client?.cookieHeader);
     stream.onSessionEvent = (sessionId, event) => {
       tracker.handleEvent(sessionId, event);
       panelListeners.forEach((cb) => cb(sessionId, event as PanelEvent));
+    };
+    // Forwarded waterfalls (approval / question) answer through `$events/result`.
+    stream.onAnswerable = (answerable) => panel.handleAnswerable(answerable);
+    stream.onAnswerableSettled = (eventId) => panel.handleAnswerableSettled(eventId);
+    // Session-list truth on 0.2.1: add/remove/status/activity arrive here, not
+    // on a mux session-collection frame. A cheap list refresh keeps the sidebar
+    // exact without polling.
+    stream.onHostEvent = (event) => {
+      if (event.startsWith("api-session/") || event === "workspace/changed") void panel.refresh();
+    };
+    stream.onWorkspaces = (items) => {
+      const archived = (items as unknown as { archivedSessionIds?: string[] }).archivedSessionIds;
+      panel.setArchivedSessionIds(Array.isArray(archived) ? archived : undefined);
+      void panel.refresh();
     };
     stream.onError = (message) => log.appendLine(`event stream: ${message}`);
     stream.onOpen = () => {
       // Reconnected (possibly to a fresh harness we respawned): flip status online.
       void discover().then((d) => {
-        if (d.alive) status.setOnline(d.version ?? "?");
+        if (d.alive) status.setOnline(d.version ?? "0.2.1");
       });
+      panel.attachStream(stream);
     };
     stream.onDisconnect = () => {
       // Stream dropped. The stream itself keeps retrying; give it a grace
@@ -234,10 +323,12 @@ export function activate(context: vscode.ExtensionContext): void {
       if (client) scheduleHarnessCheck(DISCONNECT_RECHECK_MS);
     };
     stream.start();
+    panel.attachStream(stream);
     context.subscriptions.push({
       dispose: () => {
         stream?.dispose();
         stream = null;
+        panel.attachStream(null);
       },
     });
   }
@@ -278,18 +369,17 @@ function logDeactivate(line: string): void {
 }
 
 /**
- * Reference-counted shutdown: only ever stop the harness THIS extension
- * spawned, and only when no other client is attached to it.
+ * Shutdown: only ever stop the harness THIS extension spawned.
  *
- * - Shared harness (not ours): never killed — the browser GUI or the user's
- *   own `dsh web` may be using it; we only note it stays alive.
- * - Auto-started harness (ours): ask host.describe for clientCount (provided
- *   by the runtime overlay src/harness/overlay — in-memory patch, official
- *   dsh files stay pristine). If another client (e.g. a browser tab attached
- *   to our instance) is still connected, leave it running and log where its
- *   PID record lives. Otherwise (clientCount unknown because the overlay
- *   canary failed / overlay missing, or <= 1 = only us) stop it and remove
- *   the pid record, so no orphaned windowless dsh keeps running.
+ * - Shared harness (not ours): never killed — the browser GUI or the user's own
+ *   `dsh web` may be using it; we only note it stays alive.
+ * - Auto-started harness (ours): stop it and remove the pid record.
+ *
+ * DSH 0.2.1 removed `host.describe` outright — there is no `host` namespace and
+ * no `clientCount` anywhere on the wire, so the old "another client is still
+ * attached, leave it running" probe has no source left. Our instance is
+ * detached + windowless and its pid record names it, so an orphan is strictly
+ * worse than stopping it: stop what we started.
  */
 export function deactivate(): Promise<void> {
   logDeactivate("deactivate called");
@@ -300,41 +390,8 @@ export function deactivate(): Promise<void> {
     logDeactivate("shared or no harness — nothing to stop");
     return Promise.resolve();
   }
-  // Ask the harness how many clients are attached. clientCount is
-  // undefined when the runtime overlay is missing or its canary failed (zod
-  // strips unknown keys), so treat undefined as "no other client known" — the
-  // process is ours and windowless, an orphan is worse than stopping it.
-  const probe = exitClient ?? new HarnessClient(configuredBase());
-  let settled = false;
-  let stopDone = Promise.resolve();
-  const stopOwned = (why: string): void => {
-    if (settled) return;
-    settled = true;
-    logDeactivate(why);
-    stopDone = stopHarness().then((result) => {
-      logDeactivate(`stopHarness -> ${JSON.stringify(result)}`);
-    });
-  };
-  void probe
-    .describe(AbortSignal.timeout(2000))
-    .then((desc) => {
-      const n = desc.clientCount;
-      logDeactivate(`clientCount=${String(n)}`);
-      if (n !== undefined && n > 1) {
-        settled = true;
-        logDeactivate(`keep running (${n} clients attached) — pid record: ${HARNESS_PID_FILE}`);
-        return;
-      }
-      stopOwned(`no other client (clientCount=${String(n)}) — stopping owned instance`);
-    })
-    .catch(() => {
-      stopOwned("clientCount probe failed — stopping owned instance");
-    });
-  // Timeout fallback: can't ask, but the instance is ours — stop it.
-  // Guarded by `settled` so a late describe answer cannot double-kill.
-  setTimeout(() => stopOwned("clientCount probe timed out — stopping owned instance"), 2500);
-  // Wait for any actual stop to finish before VS Code tears down, so the
-  // taskkill lands. If the probe is still in flight, that's fine — the
-  // timeout branch will stop it; we just wait on the (possibly pending) stop.
-  return stopDone;
+  logDeactivate(`stopping owned instance (pid record: ${HARNESS_PID_FILE})`);
+  return stopHarness().then((result) => {
+    logDeactivate(`stopHarness -> ${JSON.stringify(result)}`);
+  });
 }

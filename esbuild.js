@@ -63,30 +63,13 @@ async function main() {
     logLevel: "info",
   };
 
-  // Runtime overlay: pure-ESM loader + --import entry injected into the
-  // harness process (node --import dist/overlay-register.mjs ...). Must be
-  // ESM (module.register) and must NOT be bundled into the CJS extension.
-  const overlayOptions = {
-    entryPoints: ["src/harness/overlay/register.ts", "src/harness/overlay/loader.ts"],
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    target: "node20",
-    outdir: "dist",
-    entryNames: "overlay-[name]",
-    outExtension: { ".js": ".mjs" },
-    sourcemap: true,
-    logLevel: "info",
-  };
-
   copyDir("src/panel/media", "dist/media");
   copyDir("src/panel/native", "dist/media/native");
   await injectRenderer();
 
   if (watch) {
-    const [ctx, ctxOverlay, ctxRenderer] = await Promise.all([
+    const [ctx, ctxRenderer] = await Promise.all([
       esbuild.context(options),
-      esbuild.context(overlayOptions),
       // Re-inject the renderer bundle into panel.html on every rebuild.
       esbuild.context({
         entryPoints: ["src/panel/renderer.ts"],
@@ -100,10 +83,10 @@ async function main() {
       }),
     ]);
     ctxRenderer.onEnd(() => injectRenderer());
-    await Promise.all([ctx.watch(), ctxOverlay.watch(), ctxRenderer.watch()]);
+    await Promise.all([ctx.watch(), ctxRenderer.watch()]);
     console.log("[esbuild] watching…");
   } else {
-    await Promise.all([esbuild.build(options), esbuild.build(overlayOptions)]);
+    await esbuild.build(options);
   }
 }
 

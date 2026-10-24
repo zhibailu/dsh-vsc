@@ -1,26 +1,38 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { existsSync, readFileSync, readdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, dirname, join } from "node:path";
 import * as vscode from "vscode";
-import { checkDshPristine } from "./overlay/pristine";
 
 let child: ChildProcess | undefined;
 let launcher: { node: string; script: string } | null = null;
 
 /**
- * Runtime overlay (in-memory patch) entry: dist/overlay-register.mjs is
- * bundled by esbuild (see esbuild.js) and injected into the harness process
- * via NODE_OPTIONS=--import=<file-url>. It registers an ESM loader that
- * applies the windowless + clientCount deltas to the module SOURCE as the
- * harness loads it — the official dsh files on disk stay pristine (pure
- * bridge; see src/harness/overlay/deltas.ts + internal/runtime-overlay.md).
+ * Launch token printed by `dsh web` when it boots
+ * (`dsh web: http://127.0.0.1:<port>/?token=<token>`).
+ *
+ * DSH 0.2.1 fences every `/api/*` request and the WS handshake behind a signed
+ * cookie that can only be minted from this token, and the token is a
+ * per-process `randomBytes` value that is NEVER written to disk
+ * (`processLaunchToken` in dsh-client-connection). So a client that launched the
+ * harness can only authenticate by reading the launch output — which is why
+ * startHarness keeps stdout piped instead of "ignore".
  */
-const OVERLAY_REGISTER = join(__dirname, "overlay-register.mjs");
+let launchToken: string | undefined;
 
-function overlayRegisterPath(): string | undefined {
-  return existsSync(OVERLAY_REGISTER) ? OVERLAY_REGISTER : undefined;
+/** Token of the harness this extension started (undefined when it did not). */
+export function readLaunchToken(): string | undefined {
+  return launchToken;
+}
+
+export function clearLaunchToken(): void {
+  launchToken = undefined;
+}
+
+/** Pull the token out of one line of `dsh web` output. */
+function captureLaunchToken(line: string): void {
+  const match = /[?&]token=([A-Za-z0-9_-]+)/.exec(line);
+  if (match) launchToken = match[1];
 }
 
 /**
@@ -95,34 +107,36 @@ function isPidRecordAlive(): boolean {
 }
 
 /**
- * Build the child env: inherit the parent, but ensure GITHUB_TOKEN is present
- * and inject the runtime overlay --import flag.
+ * Build the child env: inherit the parent, but ensure GITHUB_TOKEN is present.
  *
- * The web profile fails the whole boot when GITHUB_TOKEN is missing
- * (mcp-github config becomes invalid), so fall back to the persistent Windows
- * user env when the process env lacks it (e.g. VS Code launched from a stale
- * session).
+ * A missing GITHUB_TOKEN does NOT stop the boot — `dsh web` comes up and the
+ * mcp-github server starts with an empty string (measured). The damage is
+ * silent: every GitHub tool call 401s. So fill it in when we can.
  *
- * NODE_OPTIONS (not argv) is the injection mechanism on purpose: it applies
- * to the top-level harness process AND any node child it may spawn, with one
- * flag. The overlay register file lives in dist/ next to extension.js and is
- * bundled into the vsix (dist/** is not in .vscodeignore).
+ * On Windows the persistent registry value is the safety net (survives a VS
+ * Code launched from a stale session). On Linux there is no registry — the
+ * harness resolves the token itself from `$DSH_HOME/.env` via the mcp-github
+ * patch row, so nothing is injected here.
+ *
+ * NOTE (0.2.1): the runtime overlay — and with it the NODE_OPTIONS `--import`
+ * injection — is retired. Every delta it used to carry is now shipped by DSH
+ * itself (windowless subprocess spawn, STARTF_USESHOWWINDOW|SW_HIDE in
+ * dsh-win32-process) or no longer exists (dsh-host-apiproxy `clientCount`).
  */
 async function resolveSpawnEnv(): Promise<NodeJS.ProcessEnv> {
   const env: NodeJS.ProcessEnv = { ...process.env };
-  if (!env.GITHUB_TOKEN) {
+  if (!env.GITHUB_TOKEN && process.platform === "win32") {
     const userToken = await readWindowsUserEnv("GITHUB_TOKEN");
     if (userToken) env.GITHUB_TOKEN = userToken;
-  }
-  const register = overlayRegisterPath();
-  if (register) {
-    const flag = `--import=${pathToFileURL(register).href}`;
-    env.NODE_OPTIONS = env.NODE_OPTIONS ? `${env.NODE_OPTIONS} ${flag}` : flag;
   }
   return env;
 }
 
 function readWindowsUserEnv(name: string): Promise<string | undefined> {
+  // WSL *can* reach reg.exe through interop, so this would "work" from a Linux
+  // extension host too — but it would hand the harness a token belonging to the
+  // Windows side of a different machine namespace. Refuse explicitly.
+  if (process.platform !== "win32") return Promise.resolve(undefined);
   return new Promise((resolve) => {
     execFile("reg", ["query", "HKCU\\Environment", "/v", name], { windowsHide: true }, (error, stdout) => {
       if (error) return resolve(undefined);
@@ -146,7 +160,67 @@ function runWhereAll(name: string): Promise<string[]> {
   });
 }
 
+/** Entry script of the harness on both platforms. */
+const DSH_ENTRY = join("@deepseek-ai", "dsh", "lib", "bin.js");
+
+/**
+ * Directories probed for a Linux node/dsh install, highest priority first.
+ *
+ * The extension host's PATH is NOT the terminal's PATH: it is the Linux default
+ * plus the Windows interop mounts, so it never carries `~/.local/node/bin`
+ * (Ubuntu's .bashrc returns early for non-interactive shells, so PATH edits
+ * written there never reach it). Probe the known install roots directly.
+ *
+ * Interop entries are harmless here: /mnt/c/... holds `node.exe`, never a bare
+ * `node`, so the existsSync probes below cannot pick a Windows binary.
+ */
+function posixBinDirs(): string[] {
+  const home = homedir();
+  const dirs = [join(home, ".local", "node", "bin")];
+  try {
+    const nvmRoot = join(home, ".nvm", "versions", "node");
+    for (const version of readdirSync(nvmRoot)) dirs.push(join(nvmRoot, version, "bin"));
+  } catch {
+    /* no nvm */
+  }
+  dirs.push("/usr/local/bin", "/usr/bin", "/bin");
+  for (const entry of (process.env.PATH ?? "").split(delimiter)) {
+    if (entry) dirs.push(entry);
+  }
+  return dirs;
+}
+
+function resolveNodePathPosix(): string | undefined {
+  for (const dir of posixBinDirs()) {
+    const candidate = join(dir, "node");
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+/**
+ * Locate `lib/bin.js`. Two derivations, because neither covers every layout:
+ * the prefix of the node that will run it (`<prefix>/bin/node` →
+ * `<prefix>/lib/node_modules/...`, which covers ~/.local/node, /usr/local, /usr
+ * and nvm), and the realpath of the `dsh` shim (npm's global bin is a symlink
+ * straight at bin.js).
+ */
+function resolveDshScriptPosix(nodePath: string): string | undefined {
+  const candidates = [join(dirname(dirname(nodePath)), "lib", "node_modules", DSH_ENTRY)];
+  for (const dir of posixBinDirs()) {
+    const shim = join(dir, "dsh");
+    if (!existsSync(shim)) continue;
+    try {
+      candidates.push(realpathSync(shim));
+    } catch {
+      /* broken symlink — the prefix-derived candidate still stands */
+    }
+  }
+  return candidates.find((candidate) => candidate.endsWith(DSH_ENTRY) && existsSync(candidate));
+}
+
 async function resolveNodePath(): Promise<string | undefined> {
+  if (process.platform !== "win32") return resolveNodePathPosix();
   const hits = await runWhereAll("node");
   const exe = hits.find((h) => h.toLowerCase().endsWith(".exe"));
   if (exe) return exe;
@@ -157,14 +231,19 @@ async function resolveNodePath(): Promise<string | undefined> {
 }
 
 /**
- * Resolve the real dsh entry script. We must NOT launch through `dsh`/`npx`
- * shims: npm .cmd shims chain `cmd.exe → dsh.cmd → cmd.exe`, and the inner cmd
- * opens its own visible console even when the outer spawn used windowsHide.
- * Spawning `node lib/bin.js` directly with windowsHide (CREATE_NO_WINDOW)
- * keeps the whole harness tree windowless (the MCP SDK already hides its own
- * server children).
+ * Resolve the real dsh entry script.
+ *
+ * On Windows we must NOT launch through `dsh`/`npx` shims: npm .cmd shims chain
+ * `cmd.exe → dsh.cmd → cmd.exe`, and the inner cmd opens its own visible console
+ * even when the outer spawn used windowsHide. Spawning `node lib/bin.js`
+ * directly with windowsHide (CREATE_NO_WINDOW) keeps the whole harness tree
+ * windowless (the MCP SDK already hides its own server children).
+ *
+ * On Linux the same "spawn node + bin.js directly" rule holds, but it is
+ * reached a different way — see resolveDshScriptPosix.
  */
-async function resolveDshScript(): Promise<string | undefined> {
+async function resolveDshScript(nodePath: string): Promise<string | undefined> {
+  if (process.platform !== "win32") return resolveDshScriptPosix(nodePath);
   // Prefer the .cmd shim (e.g. %APPDATA%\npm\dsh.cmd); `where` may list a
   // bare extensionless `dsh` first, which is not executable by CreateProcess.
   const hits = await runWhereAll("dsh");
@@ -203,7 +282,7 @@ async function resolveLauncher(): Promise<{ node: string; script: string } | nul
   if (launcher) return launcher;
   try {
     const node = await resolveNodePath();
-    const script = await resolveDshScript();
+    const script = node ? await resolveDshScript(node) : undefined;
     if (!node || !script) return null;
     launcher = { node, script };
     return launcher;
@@ -233,43 +312,65 @@ export async function startHarness(port: number, log: vscode.OutputChannel): Pro
   const env = await resolveSpawnEnv();
   const l = await resolveLauncher();
   if (!l) {
-    log.appendLine("cannot resolve node/dsh for the silent launch — PATH missing `node` or the `dsh` shim; run `dsh web` manually for now");
+    log.appendLine(
+      process.platform === "win32"
+        ? "cannot resolve node/dsh for the silent launch — PATH missing `node` or the `dsh` shim; run `dsh web` manually for now"
+        : "cannot resolve node/dsh for the silent launch — no Linux node + dsh lib/bin.js found (probed ~/.local/node/bin, ~/.nvm/versions/node/*/bin, /usr/local/bin, /usr/bin and PATH); run `dsh web` manually for now"
+    );
     return;
   }
-  // Runtime overlay status + official-body integrity (read-only, cheap).
-  const overlay = overlayRegisterPath();
-  log.appendLine(
-    overlay
-      ? `runtime overlay: on (${overlay} — in-memory clientCount + windowless patches; official dsh files untouched)`
-      : "runtime overlay: MISSING dist/overlay-register.mjs — clientCount/windowless patches NOT applied (rebuild the extension)"
-  );
-  const subRoot = join(dirname(dirname(l.script)), "node_modules", "@deepseek-ai");
-  const rep = checkDshPristine(subRoot);
-  if (rep.ok) {
-    log.appendLine(`dsh install integrity: pristine (${rep.pristine.length} official files byte-identical to npm release)`);
-  } else {
-    log.appendLine(
-      `dsh install integrity: NOT pristine — missing=[${rep.missing.join(", ")}] modified=[${rep.modified.join(", ")}] (run scripts/restore-dsh-pristine.ps1)`
-    );
-  }
+  // Runtime overlay is retired on the 0.2.1 line: nothing to inject, nothing
+  // to verify. The official tree is consumed exactly as npm published it.
   const args = ["web", "--no-open", "--port", String(port)];
+  // `dsh web` takes its workspace from the process cwd, and sessions bucket by
+  // that absolute path — so an inherited cwd decides which history the user
+  // sees. The extension host's cwd is NOT the open folder: measured on WSL it
+  // is `/mnt/d/Microsoft VS Code`, which would file every session under a
+  // bucket nobody ever opens. Pin it to the first workspace folder, and fall
+  // back to HOME when the window has no folder open at all (an empty window
+  // still activates the extension). Windows keeps the inherited cwd —
+  // unchanged behaviour there.
+  const cwd =
+    process.platform === "win32"
+      ? undefined
+      : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? homedir());
   log.appendLine(`$ ${l.node} ${l.script} ${args.join(" ")} (direct node, windowless, detached, shared ~/.dsh)`);
+  log.appendLine(`cwd: ${cwd ?? "<inherited>"}`);
   log.appendLine(
     env.GITHUB_TOKEN
       ? `GITHUB_TOKEN: ${env.GITHUB_TOKEN.length} chars (${process.env.GITHUB_TOKEN ? "process env" : "Windows user env fallback"})`
-      : "GITHUB_TOKEN: MISSING — dsh web will fail to boot (mcp-github config)"
+      : "GITHUB_TOKEN: not in the launching env — the harness resolves it from $DSH_HOME/.env (mcp-github patch row)"
   );
   child = spawn(l.node, [l.script, ...args], {
     shell: false,
     windowsHide: true,
     detached: true,
-    stdio: "ignore",
+    // stdout MUST be piped: `dsh web` prints its one-shot authenticated URL
+    // there, and that line is the only source of the 0.2.1 launch token.
+    stdio: ["ignore", "pipe", "pipe"],
     env,
+    cwd,
   });
+  launchToken = undefined;
+  const drain = (stream: NodeJS.ReadableStream | null, prefix: string): void => {
+    if (!stream) return;
+    stream.setEncoding("utf8");
+    stream.on("data", (chunk: string) => {
+      for (const line of String(chunk).split(/\r?\n/)) {
+        const text = line.trim();
+        if (!text) continue;
+        captureLaunchToken(text);
+        log.appendLine(`${prefix}${text}`);
+      }
+    });
+  };
+  drain(child.stdout, "dsh: ");
+  drain(child.stderr, "dsh(err): ");
   writePidRecord({ pid: child.pid ?? 0, port, startedAt: new Date().toISOString(), args: [l.script, ...args] });
   child.on("exit", (code) => {
     log.appendLine(`auto-started dsh web exited (code ${code})`);
     child = undefined;
+    launchToken = undefined;
     clearPidRecord();
   });
   child.on("error", (err) => log.appendLine(`dsh web spawn error: ${err.message}`));
@@ -304,10 +405,29 @@ export function stopHarness(): Promise<{ killed: boolean; pid?: number; error?: 
     clearPidRecord();
     return Promise.resolve({ killed: false });
   }
+  const target = pid;
   return new Promise((resolve) => {
-    execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, (error) => {
-      clearPidRecord();
-      resolve(error ? { killed: false, pid, error: error.message } : { killed: true, pid });
-    });
+    if (process.platform === "win32") {
+      execFile("taskkill", ["/PID", String(target), "/T", "/F"], { windowsHide: true }, (error) => {
+        clearPidRecord();
+        resolve(error ? { killed: false, pid: target, error: error.message } : { killed: true, pid: target });
+      });
+      return;
+    }
+    // POSIX: the child was spawned detached, so it leads its own process group.
+    // Signalling the NEGATIVE pid takes the whole tree down (node + npx + the
+    // MCP server children) — the same job `taskkill /T` does on Windows.
+    for (const signalTarget of [-target, target]) {
+      try {
+        process.kill(signalTarget, "SIGTERM");
+        clearPidRecord();
+        resolve({ killed: true, pid: target });
+        return;
+      } catch {
+        /* fall through to the plain-pid form */
+      }
+    }
+    clearPidRecord();
+    resolve({ killed: false, pid: target, error: `no live process for pid ${target}` });
   });
 }

@@ -158,6 +158,14 @@ DSH 官方界面 = **runtime + 插件集**。官方每换一次 UI，本质是**
 
 ## 4. 唯一的技术取舍：overlay 补丁
 
+> **【2026-10-24 作废】整节已退役。** 升级到 DSH 0.2.1 线后，这 4 个 delta 一个都不需要了：
+> 官方的 `dsh-win32-process` 自己就用 `STARTF_USESHOWWINDOW|SW_HIDE`（`dwFlags: 257` + `wShowWindow: 0`）起子进程，
+> `dsh-subprocess-local` 的 Windows 分支原生带 `windowsHide: true`，
+> 而 `clientCount` 随 `dsh-host-apiproxy` 整个包一起消失了（0.2.1 里根本没有 `host` 命名空间）。
+> `src/harness/overlay/` 目录、`NODE_OPTIONS` 注入、`pristine.ts` 的 SHA-256 表、`tsconfig.overlay.json` 全部删除。
+> **下面是 0.1.x 时代的历史记录，仅供理解"为什么当初要越线"，不要照着它写代码。**
+> 当前契约见 `AGENTS.md` 不变量 3–6 与 `src/harness/protocol.ts`。
+
 它说明 overlay 为什么存在、如何保证安全、以及何时退役。
 
 ### 4.1 它是什么，为什么存在

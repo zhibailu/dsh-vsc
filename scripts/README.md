@@ -19,8 +19,8 @@
 ## 背景（如实记录）
 
 - 曾有两个补丁脚本（`patch-dsh-windowless.ps1` / `patch-dsh-client-count.ps1`）**直接改写官方安装包文件**，违反"纯桥接：绝不写 DSH 官方文件"，已删除。
-- 现在所有行为补丁（windowless 工具执行、host.describe 的 clientCount）由**运行时内存覆盖**实现（`src/harness/overlay/`，经 NODE_OPTIONS 注入 harness 进程，磁盘官方文件全程只读）。契约见 `internal/runtime-overlay.md`（私人区，不随仓库公开）。
-- `restore-dsh-pristine.ps1` 负责把历史补丁痕迹还原回官方原版，并做 SHA256 校验。
+- 之后又用**运行时内存覆盖**（`src/harness/overlay/`，经 NODE_OPTIONS 注入）临时补过 `clientCount` 与 windowless；**这一层在 DSH 0.2.1 上已整体退役**：控制台隐藏由官方 `dsh-win32-process` 自己做，`clientCount` 随 `dsh-host-apiproxy` 包消失。现在扩展对官方文件**零侵入**，也不再注入 `NODE_OPTIONS`。
+- `restore-dsh-pristine.ps1` 只对**装过 0.1.x 的老机器**还有意义：它把历史补丁痕迹还原回官方原版并做 SHA256 校验；新装的 0.2.1 从未被改过，跑不跑都一样。
 
 ## ⚠️ 已知问题（如实记录）
 

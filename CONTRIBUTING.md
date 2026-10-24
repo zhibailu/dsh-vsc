@@ -1,6 +1,6 @@
 # Contributing to DSH Bridge (dsh-vsc)
 
-Thanks for helping. This project is a "pure bridge" to DeepSeek Harness — before you send a PR, read [docs/design.md](docs/design.md) so your change fits the philosophy, and [AGENTS.md](AGENTS.md) for the hard invariants (especially the **overlay rules** and the **no-second-server** rule).
+Thanks for helping. This project is a "pure bridge" to DeepSeek Harness — before you send a PR, read [docs/design.md](docs/design.md) so your change fits the philosophy, and [AGENTS.md](AGENTS.md) for the hard invariants (especially the **wire-contract** rules and the **no-second-server** rule).
 
 ## How to build and test
 
@@ -23,7 +23,7 @@ node scratch/auto-test.mjs <sessionId> <turnNo>
 
 - **Bug fixes** with a clear reproduction and, where possible, a regression test.
 - **Clarity** — docs, README, comments. The project values "explaining the architecture to newcomers" (see `docs/design.md`).
-- **Upstream adaption** — if DSH ships a field that makes an overlay delta redundant, retire that delta (per the overlay retirement path) instead of keeping it.
+- **Upstream adaption** — this bridge tracks DSH's wire contract across generations (it moved from the 0.1.x dot-named endpoints to the 0.2.1 slash-named Typert Remote surface, which also retired the runtime overlay entirely). If a future generation changes a shape, follow the wire — never patch DSH to fit the bridge.
 
 ## Before you submit
 
@@ -37,7 +37,7 @@ node scratch/auto-test.mjs <sessionId> <turnNo>
 | Path | What it is |
 |---|---|
 | `src/` | Extension runtime (TS + panel assets) |
-| `src/harness/overlay/` | The only intentional crossing — read its README first |
+| `src/harness/protocol.ts` | The wire contract for the DSH 0.2.1 line — read it before touching any RPC |
 | `docs/` | Public user docs (incl. `design.md`, screenshots) |
 | `internal/` | Private maintainer notes — git-ignored, do **not** commit |
 | `scratch/` | Throwaway probes/tests against a live harness |

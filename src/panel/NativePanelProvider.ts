@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { HarnessClient, RpcErrorResult } from "../harness/client";
 import type { PromptContentPart, QueueAction } from "../harness/protocol";
+import type { AnswerableEvent, HarnessEventStream } from "../events/eventStream";
 import type { HostMessage, PanelEvent, PanelSession, TodoItem, ToolLineDiff, WebviewMessage } from "./protocol";
 import { countMetaDiff, countToolArgsDiff } from "../editor/diffCount";
 import { INTENT_CHOICES, sendAsk } from "../editor/askSelection";
@@ -50,8 +51,7 @@ const OFFICIAL_PRESET_COPY: Record<string, { name: string; description: string }
  * limit is duplicated here: quoting this deployment's numbers would be the
  * bridge re-modelling a core fact that the deployment config owns.
  */
-const ATTACHMENT_REASON_COPY: Record<string, string> = {
-  IMAGE_DIMENSION_TOO_LARGE: "图片单边像素超过本体上限，请先裁剪或缩小后再发。",
+const ATTACHMENT_REASON_COPY: Record<string, string> = {  IMAGE_DIMENSION_TOO_LARGE: "图片单边像素超过本体上限，请先裁剪或缩小后再发。",
   IMAGE_TOO_MANY_PIXELS: "图片总像素超过本体上限，请先缩小后再发。",
   IMAGE_TOO_LARGE: "单张图片体积超过本体上限，请压缩后再发。",
   TOO_MANY_IMAGES: "单条消息的图片数量超过本体上限，请分批发送。",
@@ -66,6 +66,9 @@ const ATTACHMENT_REASON_COPY: Record<string, string> = {
   ATTACHMENT_CORRUPT: "本体里的这张图片已损坏，无法读取。",
   ATTACHMENT_READ_FAILED: "本体读取这张图片失败。",
   ATTACHMENT_WRITE_FAILED: "本体保存这张图片失败（磁盘或权限问题）。",
+  // 0.2.1 additions (same attachment core, more call sites reach them)
+  QUEUE_EDIT_NON_TEXT: "队列里的消息只支持编辑文字内容。",
+  FILE_NOT_STAGED: "这个文件没有上传到本会话，请重新附加。",
 };
 
 /**
@@ -78,14 +81,26 @@ const ATTACHMENT_REASON_COPY: Record<string, string> = {
  * its code for support while still naming the source. Local (VS Code / fs)
  * failures just get the Chinese prefix.
  */
+/**
+ * The three permission presets every DSH deployment ships (web GUI header
+ * select). 0.2.1's `permissions` projection carries only the CURRENT value, so
+ * this roster is the fallback that keeps the select renderable.
+ */
+const PERMISSION_PRESETS = ["read-only", "workspace-write", "danger-full-access"] as const;
+
 function describeHarnessFailure(prefix: string, error: unknown): string {
   if (error instanceof RpcErrorResult) {
     const { code, message, details } = error.rpcError;
     const reason = typeof details.reason === "string" ? details.reason : undefined;
-    if (code === "attachment-error" && reason && ATTACHMENT_REASON_COPY[reason]) {
+    // DSH 0.2.1 funnels EVERY image refusal through `session/attachment-invalid`
+    // with the attachment-core reason code in `details.reason`
+    // (dsh-api-session-controller/lib/index.js:940,960,987,995). 0.1.x used a
+    // bare `attachment-error`; both spellings are accepted so the copy table
+    // keeps working if the code moves again.
+    if ((code === "session/attachment-invalid" || code === "attachment-error") && reason && ATTACHMENT_REASON_COPY[reason]) {
       return `${prefix}：${ATTACHMENT_REASON_COPY[reason]}（DSH 本体限制，不是本扩展的问题）`;
     }
-    if (code === "model-unavailable") {
+    if (reason === "MODEL_DOES_NOT_SUPPORT_IMAGES" || code === "session/model-unavailable" || code === "model-unavailable") {
       return `${prefix}：该模型不接受图像输入，而本会话已包含图片（DSH 本体的限制，不是本扩展的问题）。请改选支持图像输入的模型。`;
     }
     return `${prefix}：DSH 本体拒绝了这次请求（${code}）。原文：${message}`;
@@ -104,7 +119,16 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
 
   private view?: vscode.WebviewView;
   private client: HarnessClient | null = null;
+  private stream: HarnessEventStream | null = null;
   private activeSessionId: string | null = null;
+  /**
+   * Latest projection unit per (session, key). DSH 0.2.1 pushes projections on
+   * `session/control` and puts only HINTS on the `session/list` rows, so the
+   * list's title / token usage / stats are read from here.
+   */
+  private readonly projectionCache = new Map<string, Map<string, unknown>>();
+  /** Archived session ids — 0.2.1 keeps them on the workspace follow baseline, not on session rows. */
+  private archivedSessionIds = new Set<string>();
   private sessions: PanelSession[] = [];
   private titles = new Map<string, string>();
   private connected = false;
@@ -170,18 +194,18 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         // the web GUI's task bar exactly). The `permissions` unit carries the
         // session's permission presets (header 权限 select). Other projection
         // frames fall through to the generic event path below.
+        // 0.2.1 delivers these on the host-wide session/control stream and keeps
+        // the session LIST rows free of values, so every unit is cached for the
+        // list render (title / tokenUsage / sessionStats / contextPressure).
         const data = (event.data ?? {}) as { key?: unknown; value?: unknown };
+        if (typeof data.key === "string") this.rememberProjection(sessionId, data.key, data.value);
         if (data.key === "todos") {
           this.todos = Array.isArray(data.value) ? (data.value as TodoItem[]) : [];
           this.post({ type: "todos", sessionId, items: this.todos });
           return;
         }
         if (data.key === "permissions") {
-          const value = data.value as { options?: { value: string; name?: string }[]; currentValue?: string } | undefined;
-          if (value && Array.isArray(value.options)) {
-            this.permissions = { options: value.options, currentValue: value.currentValue };
-            this.postPermissions();
-          }
+          this.applyPermissions(data.value as { options?: { value: string; name?: string }[]; currentValue?: string } | undefined);
           return;
         }
       }
@@ -193,17 +217,10 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       } else if (event.type === "tool/result") {
         this.handleToolResultDiff(sessionId, event);
       }
-      // Answerable interaction frames (approval/requested, question/requested)
-      // carry their envelope rpcId — forward them as a dedicated interaction
-      // message so the panel can render a decision card and answer via
-      // /api/respond (the raw event is ALSO posted below; the panel ignores
-      // it for interaction kinds). Settled frames close the card.
-      if (event.type === "approval/requested" || event.type === "question/requested") {
-        this.handleInteraction(sessionId, event);
-      } else if (event.type === "approval/resolved" || event.type === "question/resolved") {
-        const rpcId = event.rpcId ?? "";
-        if (rpcId) this.post({ type: "interactionSettled", sessionId, rpcId });
-      }
+      // Answerable interactions no longer ride the session event stream: DSH
+      // 0.2.1 forwards `approval/request` and `user-questions/request` as
+      // waterfalls on the `$events` stream, which the host hands to
+      // handleAnswerable()/handleAnswerableSettled() instead.
       this.post({ type: "event", sessionId, event });
     });
     // Keep the @ file index fresh.
@@ -230,6 +247,118 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
   }
 
   /**
+   * (Re)attach the live event stream. The panel owns "which session is
+   * followed": the transport carries exactly ONE `session/follow` stream, so
+   * the provider re-points it whenever the active session changes.
+   */
+  attachStream(stream: HarnessEventStream | null): void {
+    this.stream = stream;
+    this.followActive();
+  }
+
+  /** Point the live follow stream at the active session (no-op when unchanged). */
+  private followActive(): void {
+    this.stream?.followSession(this.activeSessionId);
+  }
+
+  /** Archived-session set from the workspace follow baseline (0.2.1 moved it off the rows). */
+  setArchivedSessionIds(archived: string[] | undefined): void {
+    if (Array.isArray(archived)) this.archivedSessionIds = new Set(archived);
+  }
+
+  /**
+   * `$events/result` needs the forwarded-event client id handed out by the live
+   * `$events` stream; without it an answer cannot be correlated.
+   */
+  private remoteClientId(): string {
+    const id = this.stream?.remoteClientId;
+    if (!id) throw new Error("事件流尚未就绪（缺少 $events clientId），请稍后重试");
+    return id;
+  }
+
+  /** Cache one projection unit (0.2.1 pushes these on session/control). */
+  private rememberProjection(sessionId: string, key: string, value: unknown): void {    let map = this.projectionCache.get(sessionId);
+    if (!map) {
+      map = new Map();
+      this.projectionCache.set(sessionId, map);
+    }
+    map.set(key, value);
+  }
+
+  private projectionValue<T>(sessionId: string, key: string): T | undefined {
+    return this.projectionCache.get(sessionId)?.get(key) as T | undefined;
+  }
+
+  /**
+   * Apply the permissions projection. 0.2.1 publishes only `currentValue` (the
+   * preset id) — the roster itself no longer rides the projection — so fall
+   * back to the three presets every deployment ships, which is exactly what the
+   * header select offers.
+   */
+  private applyPermissions(value: { options?: { value: string; name?: string }[]; currentValue?: string } | undefined): void {
+    if (!value) return;
+    const options =
+      Array.isArray(value.options) && value.options.length > 0
+        ? value.options
+        : PERMISSION_PRESETS.map((preset) => ({ value: preset }));
+    this.permissions = { options, currentValue: value.currentValue };
+    this.postPermissions();
+  }
+
+  /**
+   * A forwarded waterfall arrived (`approval/request`, `user-questions/request`).
+   * 0.2.1 has no `/api/respond`: the answer rides `$events/result` and is
+   * correlated by `eventId` + the stream's `clientId`. The panel's existing
+   * interaction card renders it unchanged by reusing `rpcId` as the slot.
+   */
+  handleAnswerable(answerable: AnswerableEvent): void {
+    const sessionId = answerable.sessionId || (this.activeSessionId ?? "");
+    if (!sessionId) return;
+    const request = answerable.request;
+    if (answerable.event === "approval/request") {
+      this.post({
+        type: "interaction",
+        sessionId,
+        rpcId: answerable.eventId,
+        kind: "approval",
+        approvalId: String(request.approvalId ?? request.id ?? ""),
+        toolName: String(request.toolName ?? ""),
+        callId: request.callId !== undefined ? String(request.callId) : undefined,
+        reason: request.reason !== undefined ? String(request.reason) : undefined,
+      });
+      return;
+    }
+    if (answerable.event === "user-questions/request") {
+      const raw = Array.isArray(request.questions) ? (request.questions as Record<string, unknown>[]) : [];
+      this.post({
+        type: "interaction",
+        sessionId,
+        rpcId: answerable.eventId,
+        kind: "question",
+        questions: raw.map((q) => ({
+          id: String(q.id ?? ""),
+          question: String(q.question ?? ""),
+          detail: q.detail !== undefined ? String(q.detail) : undefined,
+          header: q.header !== undefined ? String(q.header) : undefined,
+          multiSelect: q.multiSelect === true,
+          options: Array.isArray(q.options)
+            ? (q.options as Record<string, unknown>[]).map((o) => ({
+                label: String(o.label ?? ""),
+                description: o.description !== undefined ? String(o.description) : undefined,
+              }))
+            : undefined,
+        })),
+      });
+    }
+  }
+
+  /** The waterfall was answered elsewhere or cancelled by the Host. */
+  handleAnswerableSettled(eventId: string): void {
+    if (!eventId) return;
+    this.post({ type: "interactionSettled", sessionId: this.activeSessionId ?? "", rpcId: eventId });
+  }
+
+  /**
    * Show an in-panel "ask about selection" card (preferred path for
    * dsh.askSelection): the editor context block is rendered inside the
    * sidebar with the intent choices, so the whole flow stays in the panel
@@ -247,17 +376,18 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       return;
     }
     try {
-      const [list, workspaces] = await Promise.all([
-        this.client.listSessions(),
-        this.client.workspaceList(),
-      ]);
-      const archived = new Set(workspaces.archivedSessionIds);
-      const { items } = list;
+      const { items } = await this.client.listSessions();
       // Mirror the official client's session visibility contract
       // (dsh-client-ui-workspace `sessionVisible`): subagent children carry
       // `origin: "subagent"` and are surfaced under their parent conversation
       // via subagent.list, never as standalone sidebar rows. Archived and
       // blank rows are excluded the same way.
+      //
+      // 0.2.1 changed two inputs: the archived set rides the workspace follow
+      // baseline instead of the session rows, and the rows carry only
+      // projection HINTS — title/usage/stats come from session/control and are
+      // served from the projection cache here.
+      const archived = this.archivedSessionIds;
       let sessions = items
         .filter((item) => !item.blank && item.origin !== "subagent" && !archived.has(item.sessionId))
         .map((item) => ({
@@ -265,11 +395,11 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           running: item.running,
           blank: item.blank,
           updatedAt: item.updatedAt,
-          title: item.projections?.values?.title ?? undefined,
-          usage: item.projections?.values?.tokenUsage ?? undefined,
-          stats: item.projections?.values?.sessionStats ?? undefined,
-          context: item.projections?.values?.contextPressure ?? undefined,
-          agentPreset: item.agentPreset,
+          title: this.projectionValue<string>(item.sessionId, "title") ?? undefined,
+          usage: this.projectionValue<PanelSession["usage"]>(item.sessionId, "tokenUsage"),
+          stats: this.projectionValue<PanelSession["stats"]>(item.sessionId, "sessionStats"),
+          context: this.projectionValue<PanelSession["context"]>(item.sessionId, "contextPressure"),
+          agentPreset: undefined,
         }))
         .sort((a, b) => b.updatedAt - a.updatedAt);
       // A freshly created session is blank until its first prompt; keep it
@@ -291,6 +421,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       if (this.sessions.length > 0 && !this.sessions.some((s) => s.sessionId === this.activeSessionId)) {
         this.activeSessionId = this.sessions[0].sessionId;
       }
+      this.followActive();
       this.postState();
       if (this.activeSessionId) {
         await this.loadHistory(this.activeSessionId, undefined);
@@ -348,6 +479,10 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         break;
       case "selectSession":
         this.activeSessionId = message.sessionId;
+        // 0.2.1 carries ONE session/follow stream: re-point it at the session
+        // the user just opened before history is requested, so the log cut and
+        // live events belong to the same session.
+        this.followActive();
         // State first: the panel drops history frames for any session that is
         // not its current activeSessionId, so switch the panel's identity
         // before shipping history, or the page gets wiped to "no messages".
@@ -410,6 +545,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           if (message.agentPreset) opts.agentPreset = message.agentPreset;
           const { sessionId } = await this.client.createSession(opts);
           this.activeSessionId = sessionId;
+          this.followActive();
           await this.refresh();
         } catch (error) {
           this.post({ type: "error", message: describeHarnessFailure("新建会话失败", error) });
@@ -420,7 +556,10 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         if (!this.activeSessionId) break;
         try {
           await this.client.archiveSession(message.sessionId);
-          if (this.activeSessionId === message.sessionId) this.activeSessionId = null;
+          if (this.activeSessionId === message.sessionId) {
+            this.activeSessionId = null;
+            this.followActive();
+          }
           await this.refresh();
         } catch (error) {
           this.post({ type: "error", message: describeHarnessFailure("删除会话失败", error) });
@@ -468,10 +607,13 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           break;
         }
         try {
-          await this.client.respond(message.rpcId, {
-            sessionId: message.sessionId,
-            approvalId: message.approvalId,
-            outcome: message.outcome,
+          // 0.2.1: approvals are forwarded waterfalls answered through
+          // `$events/result`; the waterfall's RESULT VALUE is the outcome
+          // (`allowed-once` / `rejected`), correlated by the event id the card
+          // was rendered with.
+          await this.client.answerRemoteEvent(this.remoteClientId(), message.rpcId, {
+            kind: "result",
+            value: message.outcome,
           });
         } catch (error) {
           this.post({ type: "error", message: describeHarnessFailure("审批应答失败", error) });
@@ -484,9 +626,9 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
           break;
         }
         try {
-          await this.client.respond(message.rpcId, {
-            sessionId: message.sessionId,
-            answer: { answers: message.answers },
+          await this.client.answerRemoteEvent(this.remoteClientId(), message.rpcId, {
+            kind: "result",
+            value: { answers: message.answers },
           });
         } catch (error) {
           this.post({ type: "error", message: describeHarnessFailure("选择题应答失败", error) });
@@ -569,6 +711,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
             const created = await this.client.createSession(workspaceId ? { workspaceId } : {});
             sessionId = created.sessionId;
             this.activeSessionId = sessionId;
+            this.followActive();
           } catch (error) {
             this.post({ type: "error", message: describeHarnessFailure("新建会话失败", error) });
             return;
@@ -663,26 +806,43 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
   private async loadHistory(sessionId: string, beforeSeq?: number): Promise<void> {
     if (!this.client || !sessionId) return;
     try {
-      const { events, projections, hasMore } = await this.client.history(sessionId, beforeSeq, 30);
-      const mapped = events.map((entry) => entry.event as PanelEvent);
+      // 0.2.1 split 0.1.x's session.history into session/page (the log) plus
+      // session/projections (the projection block), and `session/page` REQUIRES
+      // the log cut as `throughSeq`. The follow snapshot is the authority for
+      // that cut; a direct projections read is the fallback when no stream is
+      // open for this session yet.
+      let throughSeq = this.stream?.cursorFor(sessionId);
+      let projections: Record<string, unknown> | undefined;
+      if (beforeSeq === undefined) {
+        const snapshot = await this.client.projections(sessionId);
+        if (snapshot && snapshot.kind === "sequenced") {
+          throughSeq = throughSeq ?? snapshot.asOfSeq;
+          projections = snapshot.values;
+        } else if (snapshot && snapshot.kind === "migration-required") {
+          projections = snapshot.values;
+        }
+      }
+      if (throughSeq === undefined) throughSeq = Number.MAX_SAFE_INTEGER;
+      const page = await this.client.page(sessionId, throughSeq, beforeSeq, 30);
+      const mapped = page.records.map((entry) => entry.event as PanelEvent);
+      const hasMore = page.hasMore;
       // Per-call "+N-M" diffs for this page, shipped inside the history frame
       // so the panel has them in hand while folding the page in.
       const toolDiffs = this.diffEntriesForPage(mapped);
       // Task bar mirrors the web GUI: it renders the host-computed `todos`
       // projection (current turn's todo list; null after a turn/start reset),
-      // NOT the raw log. Seed it from the tail page's projections block so a
-      // freshly opened session shows the same state as the web tab.
+      // NOT the raw log. Seed it from the projections snapshot so a freshly
+      // opened session shows the same state as the web tab.
       if (beforeSeq === undefined) {
-        const todos = projections?.values?.todos;
-        this.todos = Array.isArray(todos) ? todos : [];
+        const todos = projections?.todos;
+        this.todos = Array.isArray(todos) ? (todos as TodoItem[]) : [];
         this.post({ type: "todos", sessionId, items: this.todos });
         // Permission presets ride the same projections block (web GUI's
-        // 权限 select): seed the header select from the tail page.
-        const perms = projections?.values?.permissions;
-        if (perms) {
-          this.permissions = { options: perms.options ?? [], currentValue: perms.currentValue };
-          this.postPermissions();
-        }
+        // 权限 select): seed the header select from it.
+        const perms = projections?.permissions as
+          | { options?: { value: string; name?: string }[]; currentValue?: string }
+          | undefined;
+        if (perms) this.applyPermissions(perms);
       }
       this.post({
         type: "history",
@@ -707,62 +867,10 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
       const title = (event.data as { title?: string } | undefined)?.title;
       if (typeof title === "string") {
         this.titles.set(sessionId, title);
+        // 0.2.1: the title is a projection; cache it so refresh() can render it.
+        this.rememberProjection(sessionId, "title", title);
         if (sessionId === this.activeSessionId) this.postState();
       }
-    }
-  }
-
-  /**
-   * Forward an answerable interaction frame (approval/requested or
-   * question/requested) to the panel as a dedicated `interaction` message.
-   * The panel answers by echoing `rpcId` through respondApproval /
-   * respondQuestion; the host then calls /api/respond.
-   */
-  private handleInteraction(sessionId: string, event: PanelEvent): void {
-    const rpcId = event.rpcId;
-    if (!rpcId) return; // unreachable frame — cannot answer it
-    const data = (event.data ?? {}) as Record<string, unknown>;
-    if (event.type === "approval/requested") {
-      this.post({
-        type: "interaction",
-        sessionId,
-        rpcId,
-        kind: "approval",
-        approvalId: String(data.approvalId ?? ""),
-        toolName: String(data.toolName ?? ""),
-        callId: data.callId !== undefined ? String(data.callId) : undefined,
-        reason: data.reason !== undefined ? String(data.reason) : undefined,
-      });
-      return;
-    }
-    if (event.type === "question/requested") {
-      const raw = Array.isArray(data.questions) ? (data.questions as Record<string, unknown>[]) : [];
-      this.post({
-        type: "interaction",
-        sessionId,
-        rpcId,
-        kind: "question",
-        questions: raw.map((q) => ({
-          id: String(q.id ?? ""),
-          question: String(q.question ?? ""),
-          detail: q.detail !== undefined ? String(q.detail) : undefined,
-          header: q.header !== undefined ? String(q.header) : undefined,
-          multiSelect: q.multiSelect === true,
-          options: Array.isArray(q.options)
-            ? (q.options as Record<string, unknown>[]).map((o) => ({
-                label: String(o.label ?? ""),
-                description: o.description !== undefined ? String(o.description) : undefined,
-              }))
-            : undefined,
-          intent:
-            q.intent && typeof q.intent === "object"
-              ? {
-                  kind: String((q.intent as Record<string, unknown>).kind ?? ""),
-                  approve: String((q.intent as Record<string, unknown>).approve ?? ""),
-                }
-              : undefined,
-        })),
-      });
     }
   }
 
@@ -891,10 +999,13 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
   private async postModels(): Promise<void> {
     if (!this.client || !this.activeSessionId) return;
     try {
-      const catalog = await this.client.models(this.activeSessionId);
+      // 0.2.1 renamed the RPC (session/models -> session/modelCatalog) and
+      // reshaped the value: `default` replaces `current`, `routableProviders`
+      // replaces `routable`.
+      const catalog = await this.client.modelCatalog();
       this.post({
         type: "models",
-        current: catalog.current,
+        current: catalog.default,
         groups: catalog.groups.map((g) => ({
           id: g.id,
           name: g.name,
@@ -957,18 +1068,18 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
         };
       });
     try {
-      const { presets } = await this.client.agentPresetList();
-      const rows = presets
-        .filter((p) => p.broken === undefined)
-        .map((p) => {
-          const official = OFFICIAL_PRESET_COPY[p.id];
-          return {
-            id: p.id,
-            name: p.name ?? official?.name,
-            description: p.description ?? official?.description,
-            isDefault: p.isDefault === true,
-          };
-        });
+      const { presets } = await this.client.agentPresets();
+      // 0.2.1 roster rows carry ONLY id/order/isDefault — no name, description,
+      // trust or broken flag. Display copy therefore comes from the shipped
+      // official roster, and the host's `order` drives the dropdown order.
+      const rows = [...presets]
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+        .map((p) => ({
+          id: p.id,
+          name: OFFICIAL_PRESET_COPY[p.id]?.name ?? p.id,
+          description: OFFICIAL_PRESET_COPY[p.id]?.description,
+          isDefault: p.isDefault === true,
+        }));
       if (rows.length === 0) {
         // Empty roster: deployment composes no presets — fall back to the
         // four shipped modes (the normal dsh deployment ships all four).
@@ -1105,7 +1216,7 @@ export class NativePanelProvider implements vscode.WebviewViewProvider {
   private async postSettingsPresets(): Promise<void> {
     if (!this.client) return;
     try {
-      const value = await this.client.agentPresetList();
+      const value = await this.client.agentPresets();
       this.settingsPanel?.webview.postMessage({ type: "settingsAgentPresets", value });
     } catch (error) {
       this.postSettingsError(describeHarnessFailure("读取预设失败", error));

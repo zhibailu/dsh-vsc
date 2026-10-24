@@ -12,6 +12,5 @@
     "types": ["node", "vscode"],
     "sourceMap": true
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/harness/overlay/loader.ts", "src/harness/overlay/register.ts"]
+  "include": ["src/**/*.ts"]
 }

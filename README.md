@@ -6,7 +6,7 @@ Read this in: **English** · [简体中文](README.zh.md)
 
 ---
 
-![version](https://img.shields.io/badge/version-0.2.6-2ea44f)
+![version](https://img.shields.io/badge/version-0.3.0-2ea44f)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![vs code](https://img.shields.io/badge/VS%20Code-%5E1.90.0-007ACC)
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
@@ -130,15 +130,15 @@ code --install-extension dsh-vsc-<version>.vsix --force
 
 ## How it works
 
-DSH exposes two things: an **RPC interface** (`POST /api/<method>`) and a **real-time event stream** (`/api/events.mux`). The web GUI is just one consumer of that contract.
+DSH exposes two things: an **RPC interface** (`POST /api/<endpoint>` — slash-separated since 0.2.1, with every argument in `payload.args`) and a **real-time event stream** (several logical streams multiplexed on one WebSocket, `/api/remote.mux`: session follow, projection control, workspace, and `$events` for approvals/questions). The web GUI is just one consumer of that contract.
 
 `dsh-vsc` is a second consumer:
 
 - **`src/harness/client.ts` — a ~200-line minimal protocol client.** It reimplements the DSH wire contract in Node (≥ 18, global `fetch`), imports **no** DSH internals, and is deliberately thin — it implements the protocol, not the plugin framework.
 - **Lossless events.** The panel receives the **raw frames** from the event stream with no re-modeling; rendering is the panel's job. The bridge stays transparent, so it can't drift from DSH's semantics.
 - **Protocol-first, UI-agnostic.** DSH's official README notes there is *no protocol version field because client and host ship together* — until an independently released client exists. This extension is exactly such an independently released client, standing on the stable **contract** layer rather than the volatile **UI** layer.
-- **The one deliberate exception — `overlay`.** Four capabilities the protocol doesn't expose (`clientCount`, hidden tool consoles) are provided by an **in-memory runtime patch** with three safety rails: it mutates only loaded memory (official files stay byte-identical on disk), it **verifies SHA-256** of the official files and bails entirely on mismatch, and it checks **canary anchors** before patching, degrading gracefully on any failure. It has an explicit retirement path (remove each delta once DSH ships the equivalent field, e.g. `hostInstanceId`).
-- **Second client, never a second server.** A real incident showed two DSH processes sharing `~/.dsh` corrupt each other's history (`corrupt session log: seq gap`). So the extension never starts a second server on an existing history: it reuses a live harness, auto-starts one only when none is reachable, and shuts it down by **reference count** (queries `host.describe` for `clientCount` before stopping) so it never kills a harness another client is attached to.
+- **Zero intrusion.** 0.1.x needed a small in-memory runtime patch (`overlay`) because the protocol exposed neither a client count nor a way to hide tool consoles. **It is fully retired as of DSH 0.2.1**: console hiding is now upstream (`dsh-win32-process` sets `STARTF_USESHOWWINDOW|SW_HIDE`), and `clientCount` disappeared with the `dsh-host-apiproxy` package. This extension no longer touches a single official file, and injects no `NODE_OPTIONS`.
+- **Second client, never a second server.** A real incident showed two DSH processes sharing `~/.dsh` corrupt each other's history (`corrupt session log: seq gap`). So the extension never starts a second server on an existing history: it reuses a live harness, auto-starts one only when none is reachable, and on shutdown stops **only the instance it started** (0.2.1 no longer exposes `clientCount`, and an orphan is worse than a stop).
 
 A full, reader-friendly deep-dive — written for someone who doesn't know the domain — lives in [docs/design.md](docs/design.md).
 

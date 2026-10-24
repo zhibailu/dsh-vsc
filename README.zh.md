@@ -6,7 +6,7 @@
 
 ---
 
-![version](https://img.shields.io/badge/version-0.2.6-2ea44f)
+![version](https://img.shields.io/badge/version-0.3.0-2ea44f)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![vs code](https://img.shields.io/badge/VS%20Code-%5E1.90.0-007ACC)
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
@@ -130,15 +130,15 @@ code --install-extension dsh-vsc-<版本号>.vsix --force
 
 ## 它怎么工作
 
-DSH 对外暴露两样东西：**RPC 接口**（`POST /api/<method>`）和**实时事件流**（`/api/events.mux`）。网页只是这份契约的一个消费方。
+DSH 对外暴露两样东西：**RPC 接口**（`POST /api/<endpoint>`，0.2.1 起端点是斜杠形式，参数统一放在 `payload.args`）和**实时事件流**（同一条 WebSocket `/api/remote.mux` 上的多条逻辑流：会话跟随、投影控制、工作区、以及承载审批/提问的 `$events`）。网页只是这份契约的一个消费方。
 
 `dsh-vsc` 是第二个消费方：
 
 - **`src/harness/client.ts` —— 约 200 行的最小协议客户端**：在 Node（≥ 18，全局 `fetch`）里重实现 DSH 的 wire contract，**不 import 任何 DSH 内部包**，刻意做得很薄——实现协议，而不是插件框架。
 - **无损事件**：面板拿到的是事件流的**原始帧**，不做二次建模；渲染交给面板自己。桥接层越透明，越不会跟官方语义脱节。
 - **协议优先、UI 无关**：官方 README 写明"没有协议版本字段，因为客户端与服务端一起发布——直到出现独立发布的客户端"。这个扩展正是那个独立发布的客户端，站的是**稳定契约**那一层，不是**易变 UI**那一层。
-- **唯一的例外 —— `overlay`**：协议没暴露的 4 个能力（`clientCount`、隐藏工具控制台）由**内存运行时补丁**提供，并上了三把锁——只改内存、磁盘官方文件一行不碰；启动时校验官方文件 **SHA-256**，对不上整体放弃；patch 前查**金丝雀锚点**，找不到就降级。且有明确退役路线（等官方补上对应字段，如 `hostInstanceId`，就删对应 delta）。
-- **第二个客户端，绝不做第二个服务端**：真实事故证明，两个 DSH 进程共用 `~/.dsh` 会互相写坏历史（`corrupt session log: seq gap`）。所以扩展绝不另起一个服务端去写同一份历史：能复用就复用，只有确实没有才自拉，关闭时用**引用计数**（问 `host.describe` 的 `clientCount`）决定停不停，绝不错杀正在被别人用着的 harness。
+- **零侵入**：0.1.x 时代这里曾有一层"内存运行时补丁"（overlay）——因为当时协议没暴露客户端数、也没法隐藏工具控制台。**0.2.1 之后它已整体退役**：控制台隐藏由官方 `dsh-win32-process` 自己做了（`STARTF_USESHOWWINDOW|SW_HIDE`），`clientCount` 随 `dsh-host-apiproxy` 整个包一起消失。现在这个扩展对官方文件**一行都不碰**，也再没有 `NODE_OPTIONS` 注入。
+- **第二个客户端，绝不做第二个服务端**：真实事故证明，两个 DSH 进程共用 `~/.dsh` 会互相写坏历史（`corrupt session log: seq gap`）。所以扩展绝不另起一个服务端去写同一份历史：能复用就复用，只有确实没有才自拉；关闭时只停**自己启动的那个**实例（0.2.1 里已没有 `clientCount` 可以问，孤儿进程比误停更糟）。
 
 给想理解这套设计的人写的完整架构说明，见 [docs/design.md](docs/design.md)。
 
